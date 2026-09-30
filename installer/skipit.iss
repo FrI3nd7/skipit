@@ -34,6 +34,8 @@ UninstallDisplayName={#AppName}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
+; Лицензия показывается на отдельном шаге мастера установки.
+LicenseFile=..\LICENSE
 ; Если программа всё же запущена — закрыть её перед заменой файлов.
 CloseApplications=force
 RestartApplications=no
@@ -49,6 +51,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#Release}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\core\xray.exe"; DestDir: "{app}\core"; Flags: ignoreversion
 Source: "..\core\sing-box.exe"; DestDir: "{app}\core"; Flags: ignoreversion
+; Лицензии: своя и вложенных ядер (MPL-2.0 и GPL-3.0 требуют прикладывать их текст и ссылки на исходники).
+Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; DestName: "THIRD_PARTY_NOTICES.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
