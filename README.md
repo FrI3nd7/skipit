@@ -12,8 +12,8 @@
 
 <br>
 
-[![version](https://img.shields.io/github/v/release/FrI3nd7/skipit?include_prereleases&sort=date&style=for-the-badge&label=version&labelColor=010409&color=FF6A1A&logo=github&logoColor=white)](https://github.com/FrI3nd7/skipit/releases)
-[![status](https://img.shields.io/badge/alpha-D29922?style=for-the-badge&label=status&labelColor=010409&logo=rocket&logoColor=white)](#-о-проекте)
+[![version](https://img.shields.io/github/v/release/FrI3nd7/skipit?include_prereleases&sort=date&style=for-the-badge&label=version&labelColor=010409&color=FF6A1A&logo=github&logoColor=white)](https://github.com/FrI3nd7/skipit/releases/latest)
+[![status](https://img.shields.io/badge/stable-3FB950?style=for-the-badge&label=status&labelColor=010409&logo=rocket&logoColor=white)](#-о-проекте)
 [![downloads](https://img.shields.io/github/downloads/FrI3nd7/skipit/total?style=for-the-badge&label=downloads&labelColor=010409&color=3FB950&logo=windows&logoColor=white)](https://github.com/FrI3nd7/skipit/releases)
 [![license](https://img.shields.io/github/license/FrI3nd7/skipit?style=for-the-badge&label=license&labelColor=010409&color=3FB950&logo=opensourceinitiative&logoColor=white)](LICENSE)
 
@@ -54,7 +54,7 @@
 
 ## 📥 Установка
 
-1. Откройте [страницу релизов](https://github.com/FrI3nd7/skipit/releases) — самый верхний и есть самый новый.
+1. Откройте [последний релиз](https://github.com/FrI3nd7/skipit/releases/latest).
 2. Скачайте **`SkipIt-Setup-Windows-<версия>.exe`** и запустите его.
 3. Скопируйте ссылку на подписку от вашего VPN-провайдера и нажмите **Ctrl+V** в окне SkipIt.
 4. Нажмите на большую кнопку ▶▶ — готово.
@@ -111,8 +111,8 @@ SkipIt сам проверяет обновления при запуске. Е�
 
 | Канал | Что приходит |
 | :--- | :--- |
-| **Стабильный** *(по умолчанию)* | Только стабильные релизы. Пока SkipIt в альфе и стабильных версий нет — приходят альфа-версии |
-| **Бета** | Всегда самые свежие версии, включая тестовые — новые функции раньше, но возможны ошибки |
+| **Стабильный** *(по умолчанию)* | Только стабильные версии |
+| **Бета** | Ещё и тестовые версии — новые функции раньше, но возможны ошибки |
 
 Канал меняется в **Настройки → О приложении**. Ядра Xray-core и sing-box обновляются там же.
 

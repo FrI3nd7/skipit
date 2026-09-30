@@ -242,7 +242,7 @@ class SettingsPage extends StatelessWidget {
             title: 'Канал обновлений',
             subtitle: s.updateChannel == UpdateChannel.beta
                 ? 'Бета: вместе с релизами приходят и пре-релизы — новые функции раньше, но возможны ошибки'
-                : 'Стабильный: только стабильные релизы (пока их нет — приходят альфа-версии)',
+                : 'Стабильный: только стабильные версии',
             trailing: Segmented<UpdateChannel>(
               value: s.updateChannel,
               items: const {UpdateChannel.stable: 'Стабильный', UpdateChannel.beta: 'Бета'},
