@@ -86,8 +86,15 @@ class Updates {
   /// (берётся самая новая версия среди всех опубликованных, черновики пропускаются).
   static Future<Release> latest(String repo, {int? proxyPort, bool prerelease = false}) async {
     if (!prerelease) {
-      final j = await _getJson('https://api.github.com/repos/$repo/releases/latest', proxyPort);
-      return Release.fromJson(j as Map<String, dynamic>, repo);
+      try {
+        final j = await _getJson('https://api.github.com/repos/$repo/releases/latest', proxyPort);
+        return Release.fromJson(j as Map<String, dynamic>, repo);
+      } on HttpException catch (e) {
+        // Стабильных релизов ещё нет (пока выходят только альфы-пре-релизы) — «Стабильный» канал
+        // получает их, чтобы пользователи с настройками по умолчанию не остались без обновлений.
+        // Как только появится обычный релиз, сюда код больше не попадёт.
+        if (e.message != 'релизов пока нет') rethrow;
+      }
     }
     final list = await _getJson('https://api.github.com/repos/$repo/releases?per_page=30', proxyPort) as List;
     final releases = [
