@@ -232,6 +232,24 @@ class WinSys {
   }
   static Future<void> openUrl(String url) => Process.run('explorer', [url]);
 
+  /// Другие VPN, которые сейчас забирают весь трафик: виртуальный (не физический) адаптер, через
+  /// который идёт маршрут по умолчанию. Свой адаптер SkipIt не считается. При ошибке — пустой список:
+  /// проверка не должна мешать подключению.
+  static Future<List<String>> otherVpnAdapters() async {
+    const script = r"$phys = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | ForEach-Object { $_.ifIndex }); "
+        r"Get-NetRoute -DestinationPrefix '0.0.0.0/0','0.0.0.0/1','128.0.0.0/1' -ErrorAction SilentlyContinue | "
+        r"Where-Object { $phys -notcontains $_.ifIndex -and $_.InterfaceAlias -ne 'SkipIt' } | "
+        r"ForEach-Object { (Get-NetAdapter -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue).InterfaceDescription } | "
+        r"Where-Object { $_ } | Sort-Object -Unique";
+    try {
+      final out = await _powershell(script);
+      if (out == null) return [];
+      return out.split(RegExp(r'\r?\n')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
   static Future<void> killPid(int pid) async {
     await Process.run('taskkill', ['/F', '/T', '/PID', '$pid']);
   }

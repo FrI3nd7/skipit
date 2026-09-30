@@ -19,7 +19,7 @@ try {
     if (-not $numeric) { throw "Не удалось разобрать версию '$Version'" }
     Write-Host "Версия: $Version (числовая $numeric)" -ForegroundColor Cyan
 
-    if (-not (Test-Path 'core\xray.exe') -or -not (Test-Path 'core\sing-box.exe')) {
+    if (-not (Test-Path 'core\skipit-xray.exe') -or -not (Test-Path 'core\skipit-sing-box.exe')) {
         & (Join-Path $PSScriptRoot 'setup.ps1')
     }
 

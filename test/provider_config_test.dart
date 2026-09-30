@@ -77,7 +77,7 @@ void main() {
     expect(s.blockNotes, containsAll(['торренты', 'IPv6', 'QUIC']));
 
     // Проверка самим ядром Xray, если оно лежит в проекте.
-    final xray = File('core/xray.exe');
+    final xray = File('core/skipit-xray.exe');
     if (xray.existsSync()) {
       final f = File('${Directory.systemTemp.path}\\skipit-provider-test.json');
       await f.writeAsString(jsonEncode(cfg));

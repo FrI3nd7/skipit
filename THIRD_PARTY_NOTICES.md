@@ -6,13 +6,13 @@ SkipIt запускает их как самостоятельные проце�
 
 ## Xray-core
 
-- Файл: `core\xray.exe`
+- Файл: `core\skipit-xray.exe` (оригинальный `xray.exe`, переименован)
 - Лицензия: **Mozilla Public License 2.0** — https://www.mozilla.org/MPL/2.0/
 - Исходный код: https://github.com/XTLS/Xray-core
 
 ## sing-box
 
-- Файл: `core\sing-box.exe`
+- Файл: `core\skipit-sing-box.exe` (оригинальный `sing-box.exe`, переименован)
 - Лицензия: **GNU General Public License v3.0 или новее** — https://www.gnu.org/licenses/gpl-3.0.html
 - Исходный код: https://github.com/SagerNet/sing-box (версия, вложенная в установщик, указана
   в SkipIt: Настройки → О приложении; исходники этой версии — по тегу `v<версия>`)

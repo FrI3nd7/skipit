@@ -163,10 +163,17 @@ ThemeData buildTheme() {
     inputDecorationTheme: InputDecorationTheme(
       filled: true,
       fillColor: C.surface2,
+      // При наведении фон поля не меняется (раньше заливался мутным) — подсвечивается только рамка.
+      hoverColor: Colors.transparent,
       isDense: true,
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: C.border)),
-      enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: C.border)),
+      enabledBorder: WidgetStateInputBorder.resolveWith((states) => OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(
+              color: states.contains(WidgetState.hovered) ? C.orange.withValues(alpha: 0.55) : C.border,
+            ),
+          )),
       focusedBorder:
           OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: C.orange)),
       labelStyle: TextStyle(color: C.muted),

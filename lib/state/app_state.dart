@@ -342,7 +342,7 @@ class AppState extends ChangeNotifier {
     if (!updatingSubs.add(sub.id)) return;
     notifyListeners();
     try {
-      final viaProxy = isConnected && settings.updateViaProxy ? settings.httpPort : null;
+      final viaProxy = isConnected && settings.updateViaProxy ? (_session ?? settings).httpPort : null;
       final fetched = await Net.fetchSubscription(sub.url, settings, proxyPort: viaProxy);
       sub.applyMeta(fetched.meta);
       sub.lastUpdated = DateTime.now();
@@ -489,6 +489,38 @@ class AppState extends ChangeNotifier {
     await connect();
   }
 
+  /// Настройки текущего подключения: те же, что в [settings], но с реально занятыми портами
+  /// (если порт из настроек держит другая программа, берётся свободный).
+  AppSettings? _session;
+
+  /// Свободен ли локальный порт (его никто не слушает).
+  static Future<bool> _portFree(int port) async {
+    try {
+      final s = await ServerSocket.bind(InternetAddress.loopbackIPv4, port);
+      await s.close();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Порт для подключения: из настроек, а если он занят — ближайший свободный.
+  /// В режиме «Только порты» порты видит пользователь, поэтому там занятый порт — ошибка.
+  Future<int> _pickPort(int preferred, Set<int> taken, String what) async {
+    if (!taken.contains(preferred) && await _portFree(preferred)) return preferred;
+    if (settings.mode == ConnectionMode.proxyOnly) {
+      throw CoreException('Порт $preferred ($what) уже занят другой программой — например, другим VPN-клиентом. '
+          'Закройте её или смените порт в Настройки → Дополнительно.');
+    }
+    for (var p = preferred + 1000; p < preferred + 1100; p++) {
+      if (!taken.contains(p) && await _portFree(p)) {
+        log.add('app', 'Порт $preferred ($what) занят другой программой, использую $p');
+        return p;
+      }
+    }
+    throw CoreException('Не нашлось свободного порта для $what');
+  }
+
   Future<void> connect() async {
     if (isBusy || isConnected) return;
     lastError = null;
@@ -496,6 +528,15 @@ class AppState extends ChangeNotifier {
     notifyListeners();
     try {
       if (usesTun && !isAdmin) throw NeedAdminException();
+
+      // Два VPN с TUN одновременно дерутся за маршруты — сеть ломается до перезагрузки.
+      if (usesTun) {
+        final other = await WinSys.otherVpnAdapters();
+        if (other.isNotEmpty) {
+          throw CoreException('Включён другой VPN (${other.join(', ')}). Отключите его и подключитесь снова — '
+              'два VPN одновременно мешают друг другу и ломают сеть.');
+        }
+      }
 
       if (settings.autoSelect && selectedServer != null) {
         final group = serversOf(selectedServer!.subscriptionId);
@@ -515,22 +556,36 @@ class AppState extends ChangeNotifier {
         await _ensureGeoFiles(routing);
       }
 
-      final config = XrayConfig.build(server: server, routing: routing, settings: settings);
+      // Порты проверяются ДО запуска: иначе «порт открыт» мог бы означать чужую программу
+      // (например, Happ на тех же 10808/10809), а не наш Xray.
+      final session = AppSettings.fromJson(settings.toJson());
+      final taken = <int>{};
+      session.socksPort = await _pickPort(settings.socksPort, taken, 'SOCKS');
+      taken.add(session.socksPort);
+      session.httpPort = await _pickPort(settings.httpPort, taken, 'HTTP');
+      taken.add(session.httpPort);
+      session.apiPort = await _pickPort(settings.apiPort, taken, 'статистика');
+      _session = session;
+
+      final config = XrayConfig.build(server: server, routing: routing, settings: session);
       await File(AppPaths.configFile).writeAsString(const JsonEncoder.withIndent('  ').convert(config));
       await _xray.start(AppPaths.xrayExe, ['run', '-c', AppPaths.configFile],
           env: {'XRAY_LOCATION_ASSET': AppPaths.geoDir.path});
       settings.lastXrayPid = _xray.pid;
       await saveNow();
 
-      if (!await waitForPort(settings.socksPort, alive: () => _xray.running)) {
+      if (!await waitForPort(session.socksPort, alive: () => _xray.running)) {
         throw CoreException('Xray не запустился:\n${log.tail(8, source: 'xray')}');
       }
+      // Ядро могло открыть порт и тут же упасть на следующей ошибке конфига — проверяем, что оно живо.
+      await Future.delayed(const Duration(milliseconds: 500));
+      if (!_xray.running) throw CoreException('Xray завершился сразу после запуска:\n${log.tail(8, source: 'xray')}');
 
       if (usesTun) {
         final domains = <String>[
           if (InternetAddress.tryParse(server.address) == null && server.address.isNotEmpty) server.address,
         ];
-        final tun = SingboxConfig.build(settings: settings, routing: routing, apps: appRules, serverDomains: domains);
+        final tun = SingboxConfig.build(settings: session, routing: routing, apps: appRules, serverDomains: domains);
         await File(AppPaths.tunConfigFile).writeAsString(const JsonEncoder.withIndent('  ').convert(tun));
         await _singbox.start(AppPaths.singboxExe, ['run', '-c', AppPaths.tunConfigFile]);
         settings.lastSingboxPid = _singbox.pid;
@@ -541,7 +596,7 @@ class AppState extends ChangeNotifier {
       }
       if (settings.mode == ConnectionMode.systemProxy || settings.mode == ConnectionMode.mixed) {
         if (!settings.systemProxyActive) settings.previousProxy = await WinSys.readProxy();
-        await WinSys.setProxy('127.0.0.1:${settings.httpPort}');
+        await WinSys.setProxy('127.0.0.1:${session.httpPort}');
         settings.systemProxyActive = true;
       }
       await saveNow();
@@ -551,7 +606,7 @@ class AppState extends ChangeNotifier {
       stats.reset();
       _statsTimer?.cancel();
       _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-        await stats.poll(settings.apiPort);
+        await stats.poll(session.apiPort);
         notifyListeners();
       });
       notifyListeners();
@@ -585,27 +640,35 @@ class AppState extends ChangeNotifier {
     }
     await _singbox.stop();
     await _xray.stop();
+    _session = null;
     settings.lastXrayPid = settings.lastSingboxPid = null;
     await saveNow();
   }
 
+  /// Ядро завершилось само. Сначала сразу отключаемся — иначе TUN продолжает перехватывать трафик
+  /// и отправлять его в пустоту, и у пользователя пропадает интернет. Переподключаемся не больше
+  /// одного раза за 5 минут и только если ядро успело нормально поработать: частые падения
+  /// обычно значат, что его закрывает другая программа, и повторы лишь дёргают сеть.
   void _onCoreCrash(int code) {
     if (status != ConnStatus.connected) return;
     final now = DateTime.now();
+    final uptime = connectedAt == null ? Duration.zero : now.difference(connectedAt!);
     _crashTimes
       ..add(now)
-      ..removeWhere((t) => now.difference(t) > const Duration(minutes: 1));
-    if (settings.autoReconnect && _crashTimes.length <= 3) {
-      log.add('app', 'Ядро упало (код $code), переподключаюсь…');
-      unawaited(() async {
-        await disconnect(keepError: true);
-        await Future.delayed(const Duration(seconds: 2));
+      ..removeWhere((t) => now.difference(t) > const Duration(minutes: 5));
+    final retry = settings.autoReconnect && _crashTimes.length <= 1 && uptime > const Duration(seconds: 30);
+    log.add('app', 'Ядро завершилось (код $code) через ${uptime.inSeconds} с работы${retry ? ', переподключаюсь' : ''}');
+    unawaited(() async {
+      await disconnect(keepError: true);
+      if (retry) {
+        await Future.delayed(const Duration(seconds: 3));
         await connect();
-      }());
-    } else {
-      lastError = 'Ядро неожиданно завершилось (код $code)';
-      unawaited(disconnect(keepError: true));
-    }
+      } else {
+        lastError = 'Ядро VPN неожиданно закрылось, подключение остановлено. Если запущен другой VPN-клиент '
+            '(например, Happ) — закройте его: он может закрывать ядро SkipIt.';
+        notifyListeners();
+      }
+    }());
   }
 
   Future<void> _ensureGeoFiles(RoutingProfile routing, {bool force = false}) async {
@@ -621,7 +684,7 @@ class AppState extends ChangeNotifier {
     updatingGeo = true;
     notifyListeners();
     try {
-      final proxy = isConnected ? settings.httpPort : null;
+      final proxy = isConnected ? (_session ?? settings).httpPort : null;
       log.add('app', 'Загрузка geoip/geosite…');
       await Net.download(r.geoipUrl, AppPaths.geoipFile, proxyPort: proxy);
       await Net.download(r.geositeUrl, AppPaths.geositeFile, proxyPort: proxy);
@@ -652,7 +715,7 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  int? get _updateProxy => isConnected ? settings.httpPort : null;
+  int? get _updateProxy => isConnected ? (_session ?? settings).httpPort : null;
 
   /// [silent] — фоновая проверка при запуске: сообщает только о найденных обновлениях.
   Future<void> checkUpdates({bool silent = false}) async {

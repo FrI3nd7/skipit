@@ -27,15 +27,16 @@ $url = Get-LatestAsset 'XTLS/Xray-core' '^Xray-windows-64\.zip$'
 $zip = Join-Path $tmp 'xray.zip'
 Invoke-WebRequest $url -OutFile $zip
 Expand-Archive $zip -DestinationPath (Join-Path $tmp 'xray') -Force
-Copy-Item (Join-Path $tmp 'xray\xray.exe') $core -Force
+# Свои имена ядер — чтобы другие VPN-клиенты не закрывали их как «чужие» xray.exe.
+Copy-Item (Join-Path $tmp 'xray\xray.exe') (Join-Path $core 'skipit-xray.exe') -Force
 
 Write-Host 'sing-box...'
 $url = Get-LatestAsset 'SagerNet/sing-box' '^sing-box-[\d.]+-windows-amd64\.zip$'
 $zip = Join-Path $tmp 'sing-box.zip'
 Invoke-WebRequest $url -OutFile $zip
 Expand-Archive $zip -DestinationPath (Join-Path $tmp 'sing-box') -Force
-Get-ChildItem (Join-Path $tmp 'sing-box') -Recurse -Filter 'sing-box.exe' | Select-Object -First 1 |
-    Copy-Item -Destination $core -Force
+$sb = Get-ChildItem (Join-Path $tmp 'sing-box') -Recurse -Filter 'sing-box.exe' | Select-Object -First 1
+Copy-Item $sb.FullName (Join-Path $core 'skipit-sing-box.exe') -Force
 
 Remove-Item $tmp -Recurse -Force
 Write-Host "Ядра лежат в $core" -ForegroundColor Green

@@ -55,7 +55,7 @@ class SingboxConfig {
       {'action': 'sniff'},
       {'protocol': 'dns', 'action': 'hijack-dns'},
       {
-        'process_name': ['xray.exe', 'sing-box.exe'],
+        'process_name': ['skipit-xray.exe', 'skipit-sing-box.exe'],
         'outbound': 'direct',
       },
       {'ip_is_private': true, 'outbound': 'direct'},

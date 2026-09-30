@@ -36,7 +36,7 @@ void main() {
     expect(((on['route'] as Map)['rules'] as List).any((r) => r['ip_version'] == 6), isFalse);
 
     // Проверка самим ядром sing-box, если оно лежит в проекте.
-    final singbox = File('core/sing-box.exe');
+    final singbox = File('core/skipit-sing-box.exe');
     if (singbox.existsSync()) {
       final f = File('${Directory.systemTemp.path}\\skipit-tun-test.json');
       await f.writeAsString(jsonEncode(cfg));

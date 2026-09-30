@@ -44,18 +44,24 @@ class Release {
 
 /// Ядро, которое умеем обновлять: откуда брать релиз и какой архив нужен для Windows x64.
 class CoreSpec {
-  const CoreSpec(this.name, this.exe, this.repo, this.assetPattern, this.versionPattern);
+  const CoreSpec(this.name, this.exe, this.archiveExe, this.repo, this.assetPattern, this.versionPattern);
   final String name;
+
+  /// Имя у нас (уникальное, чтобы другие VPN-клиенты не закрывали чужие xray.exe).
   final String exe;
+
+  /// Имя файла внутри архива релиза.
+  final String archiveExe;
   final String repo;
   final String assetPattern;
   final String versionPattern;
 
   String get path => '${AppPaths.coreDir.path}\\$exe';
 
-  static const xray = CoreSpec('Xray-core', 'xray.exe', 'XTLS/Xray-core', r'^Xray-windows-64\.zip$', r'Xray ([\d.]+)');
-  static const singbox = CoreSpec(
-      'sing-box', 'sing-box.exe', 'SagerNet/sing-box', r'^sing-box-[\d.]+-windows-amd64\.zip$', r'sing-box version ([\d.]+)');
+  static const xray = CoreSpec('Xray-core', 'skipit-xray.exe', 'xray.exe', 'XTLS/Xray-core',
+      r'^Xray-windows-64\.zip$', r'Xray ([\d.]+)');
+  static const singbox = CoreSpec('sing-box', 'skipit-sing-box.exe', 'sing-box.exe', 'SagerNet/sing-box',
+      r'^sing-box-[\d.]+-windows-amd64\.zip$', r'sing-box version ([\d.]+)');
   static const all = [xray, singbox];
 }
 
@@ -186,8 +192,8 @@ class Updates {
       final exe = Directory(out)
           .listSync(recursive: true)
           .whereType<File>()
-          .firstWhere((f) => f.path.toLowerCase().endsWith('\\${core.exe}'),
-              orElse: () => throw Exception('В архиве нет ${core.exe}'));
+          .firstWhere((f) => f.path.toLowerCase().endsWith('\\${core.archiveExe}'),
+              orElse: () => throw Exception('В архиве нет ${core.archiveExe}'));
       await AppPaths.coreDir.create(recursive: true);
       // Старый файл переименовываем, а не удаляем — если копирование сорвётся, его можно вернуть.
       final target = File(core.path);

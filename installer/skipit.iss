@@ -3,7 +3,7 @@
 ;   ISCC.exe /DAppVersion=1.0.1 installer\skipit.iss
 
 #ifndef AppVersion
-  #define AppVersion "1.0.0"
+  #define AppVersion "1.0.1"
 #endif
 #define AppName "SkipIt"
 #define AppExe "SkipIt.exe"
@@ -49,11 +49,16 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#Release}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "..\core\xray.exe"; DestDir: "{app}\core"; Flags: ignoreversion
-Source: "..\core\sing-box.exe"; DestDir: "{app}\core"; Flags: ignoreversion
+Source: "..\core\skipit-xray.exe"; DestDir: "{app}\core"; Flags: ignoreversion
+Source: "..\core\skipit-sing-box.exe"; DestDir: "{app}\core"; Flags: ignoreversion
 ; Лицензии: своя и вложенных ядер (MPL-2.0 и GPL-3.0 требуют прикладывать их текст и ссылки на исходники).
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; DestName: "THIRD_PARTY_NOTICES.txt"; Flags: ignoreversion
+
+[InstallDelete]
+; Ядра из версии 1.0.0 назывались xray.exe и sing-box.exe — убираем их при обновлении.
+Type: files; Name: "{app}\core\xray.exe"
+Type: files; Name: "{app}\core\sing-box.exe"
 
 [Icons]
 Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"

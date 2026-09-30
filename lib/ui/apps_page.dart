@@ -158,14 +158,29 @@ class _AppsPageState extends State<AppsPage> {
             const SizedBox(height: 10),
             Text(hint, textAlign: TextAlign.center, style: TextStyle(color: C.muted, fontSize: 12.5)),
             const SizedBox(height: 16),
+            // Заметная плашка: правила меняются только после переподключения, это легко пропустить.
             if (_dirty)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 14),
+              Container(
+                margin: const EdgeInsets.only(bottom: 14),
+                padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
+                decoration: BoxDecoration(
+                  color: C.orange.withValues(alpha: C.isDark ? 0.12 : 0.08),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: C.orange.withValues(alpha: 0.7), width: 1.5),
+                ),
                 child: Row(children: [
+                  const Icon(Icons.info_rounded, color: C.orange),
+                  const SizedBox(width: 12),
                   Expanded(
-                    child: Text('Изменения вступят в силу после переподключения',
-                        style: TextStyle(color: C.isDark ? C.orangeLight : C.orange)),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      const Text('Изменения ещё не применены',
+                          style: TextStyle(fontWeight: FontWeight.w800, fontSize: 14)),
+                      const SizedBox(height: 2),
+                      Text('Нажмите «Применить» — VPN переподключится на секунду с новыми правилами',
+                          style: TextStyle(color: C.muted, fontSize: 12.5)),
+                    ]),
                   ),
+                  const SizedBox(width: 12),
                   GradientButton(
                     label: 'Применить',
                     icon: Icons.refresh_rounded,

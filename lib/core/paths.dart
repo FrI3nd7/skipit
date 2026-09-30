@@ -23,14 +23,15 @@ class AppPaths {
       Directory('${Directory.current.path}\\core'),
     ];
     for (final dir in candidates) {
-      if (File('${dir.path}\\xray.exe').existsSync()) return dir;
+      if (File('${dir.path}\\skipit-xray.exe').existsSync()) return dir;
     }
     return candidates.first;
   }
 
   static String get exe => Platform.resolvedExecutable;
-  static String get xrayExe => '${coreDir.path}\\xray.exe';
-  static String get singboxExe => '${coreDir.path}\\sing-box.exe';
+  // У ядер свои имена: другие VPN-клиенты (например, Happ) закрывают чужие процессы xray.exe.
+  static String get xrayExe => '${coreDir.path}\\skipit-xray.exe';
+  static String get singboxExe => '${coreDir.path}\\skipit-sing-box.exe';
   static String get configFile => '${dataDir.path}\\config.json';
   static String get tunConfigFile => '${dataDir.path}\\tun.json';
   static String get testConfigFile => '${dataDir.path}\\test.json';
