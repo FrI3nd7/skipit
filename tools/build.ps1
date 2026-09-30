@@ -1,7 +1,7 @@
-﻿# Сборка SkipIt: программа + установщик SkipIt-Setup-<версия>.exe.
+﻿# Сборка SkipIt: программа + установщик SkipIt-Setup-Windows-<версия>.exe.
 #   powershell -ExecutionPolicy Bypass -File tools\build.ps1 [-Version 1.0.2b]
 # Без -Version берётся версия по умолчанию из lib\version.dart.
-# Результат: build\installer\SkipIt-Setup-<версия>.exe
+# Результат: build\installer\SkipIt-Setup-Windows-<версия>.exe
 
 param([string]$Version)
 
@@ -38,7 +38,7 @@ try {
 
     & $iscc "/DAppVersion=$Version" 'installer\skipit.iss'
     if ($LASTEXITCODE -ne 0) { throw 'Сборка установщика завершилась с ошибкой' }
-    Write-Host "Готово: build\installer\SkipIt-Setup-$Version.exe" -ForegroundColor Green
+    Write-Host "Готово: build\installer\SkipIt-Setup-Windows-$Version.exe" -ForegroundColor Green
 } finally {
     Pop-Location
 }

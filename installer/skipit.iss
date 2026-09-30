@@ -26,7 +26,8 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\build\installer
-OutputBaseFilename=SkipIt-Setup-{#AppVersion}
+; Начало «SkipIt-Setup» должно сохраняться: по нему установленные версии находят установщик в релизе.
+OutputBaseFilename=SkipIt-Setup-Windows-{#AppVersion}
 SetupIconFile=..\windows\runner\resources\app_icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}

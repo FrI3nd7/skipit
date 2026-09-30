@@ -16,7 +16,7 @@ powershell -ExecutionPolicy Bypass -File tools\setup.ps1                     # �
 powershell -ExecutionPolicy Bypass -File tools\build.ps1 -Version 1.0.1a     # программа + установщик
 ```
 
-Результат — `build\installer\SkipIt-Setup-1.0.1a.exe`.
+Результат — `build\installer\SkipIt-Setup-Windows-1.0.1a.exe`.
 Запуск для разработки: `flutter run -d windows`. Тесты: `flutter test`.
 Иконка пересобирается скриптом `tools\make_icon.ps1`.
 
@@ -28,7 +28,7 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1 -Version 1.0.1a     # �
    (сначала сравниваются цифры, при равных — буква; версия без буквы новее версии с буквой).
 2. Для тестовой версии отметьте **Set as a pre-release** — её получат только пользователи
    с каналом обновлений «Бета» (Настройки → О приложении).
-3. **Publish release.** Через несколько минут к релизу прикрепится `SkipIt-Setup-<версия>.exe`,
+3. **Publish release.** Через несколько минут к релизу прикрепится `SkipIt-Setup-Windows-<версия>.exe`,
    а установленные SkipIt предложат обновиться. Версия в программе берётся из тега.
 
 ## Где программа хранит данные
