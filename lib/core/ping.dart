@@ -101,8 +101,7 @@ class Pinger {
   static Future<int> _httpDelay(int port, String url) async {
     final client = HttpClient()
       ..findProxy = ((_) => 'PROXY 127.0.0.1:$port')
-      ..connectionTimeout = _timeout
-      ..badCertificateCallback = ((_, __, ___) => true);
+      ..connectionTimeout = _timeout;
     try {
       Future<int> once() async {
         final sw = Stopwatch()..start();
