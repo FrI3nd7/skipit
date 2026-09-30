@@ -67,3 +67,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload '${{ github.event.release.tag_name }}' (Get-ChildItem build/installer/*.exe).FullName --clobber
+
+      # Флаг pre-release выставляется по номеру версии, а не по галочке в форме —
+      # чтобы его нельзя было забыть: буква в конце (1.0.0a, 1.0.2b) → pre-release,
+      # без буквы (1.0.3) → обычный релиз, помеченный как последний.
+      - name: Pre-release по номеру версии
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = '${{ github.event.release.tag_name }}'
+          $v = '${{ steps.ver.outputs.version }}'
+          if ($v -match '[A-Za-z]$') {
+            gh release edit $tag --prerelease
+            Write-Host "$v — альфа/бета: отмечен как pre-release"
+          } else {
+            gh release edit $tag --prerelease=false --latest
+            Write-Host "$v — стабильная версия: обычный релиз, помечен как последний"
+          }
