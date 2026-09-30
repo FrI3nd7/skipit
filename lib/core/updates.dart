@@ -4,21 +4,33 @@ import 'dart:io';
 import 'paths.dart';
 
 class Release {
-  Release(this.tag, this.pageUrl, this.assets, {this.prerelease = false});
+  Release(this.tag, this.pageUrl, this.assets, {this.prerelease = false, this.digests = const {}});
   final String tag;
   final String pageUrl;
   final Map<String, String> assets; // имя файла → ссылка на скачивание
   final bool prerelease;
 
-  static Release fromJson(Map<String, dynamic> j, String repo) => Release(
-        j['tag_name'] as String? ?? '',
-        j['html_url'] as String? ?? 'https://github.com/$repo/releases',
-        {
-          for (final a in (j['assets'] as List? ?? const []))
-            if (a is Map) '${a['name']}': '${a['browser_download_url']}',
-        },
-        prerelease: j['prerelease'] == true,
-      );
+  /// ссылка на скачивание → SHA-256 файла (GitHub считает её сам при загрузке в релиз).
+  final Map<String, String> digests;
+
+  static Release fromJson(Map<String, dynamic> j, String repo) {
+    final assets = <String, String>{};
+    final digests = <String, String>{};
+    for (final a in (j['assets'] as List? ?? const [])) {
+      if (a is! Map) continue;
+      final url = '${a['browser_download_url']}';
+      assets['${a['name']}'] = url;
+      final d = '${a['digest'] ?? ''}';
+      if (d.startsWith('sha256:')) digests[url] = d.substring(7).toLowerCase();
+    }
+    return Release(
+      j['tag_name'] as String? ?? '',
+      j['html_url'] as String? ?? 'https://github.com/$repo/releases',
+      assets,
+      prerelease: j['prerelease'] == true,
+      digests: digests,
+    );
+  }
 
   String get version => tag.startsWith('v') ? tag.substring(1) : tag;
 
@@ -87,6 +99,28 @@ class Updates {
     return releases.first;
   }
 
+  /// SHA-256 файла средствами Windows (certutil) — без сторонних пакетов.
+  static Future<String> sha256Of(String path) async {
+    final r = await Process.run('certutil', ['-hashfile', path, 'SHA256']);
+    final m = RegExp(r'^[0-9a-fA-F ]{64,}$', multiLine: true).firstMatch(r.stdout as String);
+    if (r.exitCode != 0 || m == null) throw Exception('Не удалось посчитать контрольную сумму');
+    return m.group(0)!.replaceAll(' ', '').toLowerCase();
+  }
+
+  /// Сверяет скачанный файл с контрольной суммой из релиза. Не совпало — файл удаляется.
+  /// Если GitHub суммы не дал (старые релизы), проверка пропускается: остаётся защита HTTPS.
+  static Future<void> verify(Release release, String url, String path) async {
+    final expected = release.digests[url];
+    if (expected == null) return;
+    final actual = await sha256Of(path);
+    if (actual != expected) {
+      try {
+        await File(path).delete();
+      } catch (_) {}
+      throw Exception('Файл повреждён или подменён: контрольная сумма не совпала');
+    }
+  }
+
   /// Версия установленного ядра (`xray version` / `sing-box version`).
   static Future<String?> installedVersion(CoreSpec core) async {
     if (!File(core.path).existsSync()) return null;
@@ -133,6 +167,7 @@ class Updates {
       } finally {
         client.close(force: true);
       }
+      await verify(release, url, zip.path);
       final out = '${tmp.path}\\x';
       final r = await Process.run('powershell', [
         '-NoProfile',

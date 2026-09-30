@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../core/link_parser.dart';
 import '../core/tray.dart';
 import '../core/windows.dart';
 import '../state/app_scope.dart';
@@ -95,8 +96,48 @@ class _ShellState extends State<Shell> {
   }
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _state = AppScope.read(context)..addListener(_askPendingLinks);
+      _askPendingLinks();
+    });
+  }
+
+  AppState? _state;
+  bool _asking = false;
+
+  /// Ссылка пришла извне (skipit:// с сайта, второй запуск) — спрашиваем, прежде чем что-то добавлять.
+  Future<void> _askPendingLinks() async {
+    final state = _state;
+    if (state == null || _asking || state.pendingLinks.isEmpty || !mounted) return;
+    _asking = true;
+    final link = state.pendingLinks.first;
+    final parsed = LinkParser.parseText(link);
+    final what = [
+      for (final u in parsed.subscriptionUrls) 'подписка: ${Uri.tryParse(u)?.host ?? u}',
+      if (parsed.servers.isNotEmpty) 'серверов: ${parsed.servers.length}',
+      for (final r in parsed.routing) r.off ? 'отключение маршрутизации' : 'профиль маршрутизации «${r.profile?.name}»',
+    ];
+    await Tray.show();
+    if (!mounted) return;
+    final ok = await confirm(
+      context,
+      'Добавить из ссылки?',
+      '${what.isEmpty ? 'Ссылка не распознана.' : what.join('\n')}\n\n'
+          'Добавляйте только то, что вы открыли сами — например, ссылку от своего VPN-провайдера.',
+      ok: 'Добавить',
+    );
+    await state.resolvePendingLink(link, accept: ok);
+    _asking = false;
+    _askPendingLinks();
+  }
+
+  @override
   void dispose() {
     _sub?.cancel();
+    _state?.removeListener(_askPendingLinks);
     super.dispose();
   }
 

@@ -252,10 +252,22 @@ class AppState extends ChangeNotifier {
   // Импорт
   // ---------------------------------------------------------------------------
 
+  /// Ссылки, пришедшие извне (клик по skipit:// на сайте, второй запуск программы). Их не импортируем
+  /// молча — окно спрашивает подтверждение: иначе любой сайт мог бы подсунуть свою подписку и сервер.
+  final pendingLinks = <String>[];
+
   Future<void> handleArgs(List<String> args) async {
-    for (final a in args) {
-      if (a.contains('://')) await importText(a);
-    }
+    final links = [for (final a in args) if (a.contains('://')) a];
+    if (links.isEmpty) return;
+    pendingLinks.addAll(links);
+    notifyListeners();
+  }
+
+  /// Ответ пользователя на запрос о внешней ссылке.
+  Future<void> resolvePendingLink(String link, {required bool accept}) async {
+    pendingLinks.remove(link);
+    notifyListeners();
+    if (accept) await importText(link);
   }
 
   /// Вставка из буфера, диплинк или ручной ввод. Возвращает краткий итог.
@@ -727,7 +739,9 @@ class AppState extends ChangeNotifier {
     try {
       final path = '${Directory.systemTemp.path}\\SkipIt-Setup-${release.version}.exe';
       await Net.download(url, path, proxyPort: _updateProxy);
-      log.add('update', 'Скачан установщик ${release.version}');
+      // Запускаем только то, что совпало с контрольной суммой из релиза.
+      await Updates.verify(release, url, path);
+      log.add('update', 'Скачан и проверен установщик ${release.version}');
       return path;
     } finally {
       downloadingAppUpdate = false;

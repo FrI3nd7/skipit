@@ -59,6 +59,8 @@ class SingboxConfig {
         'outbound': 'direct',
       },
       {'ip_is_private': true, 'outbound': 'direct'},
+      // IPv6 выключен — такой трафик не выпускаем вовсе (ни в туннель, ни мимо него).
+      if (!settings.ipv6) {'ip_version': 6, 'action': 'reject'},
     ];
 
     var finalOutbound = 'proxy';
@@ -102,7 +104,9 @@ class SingboxConfig {
           'type': 'tun',
           'tag': 'tun-in',
           'interface_name': 'SkipIt',
-          'address': ['172.19.0.1/30', if (ipv6) 'fdfe:dcba:9876::1/126'],
+          // IPv6-адрес у адаптера есть всегда: иначе IPv6-трафик шёл бы мимо туннеля (утечка IP),
+          // если у интернет-провайдера пользователя есть IPv6. При выключенном IPv6 он блокируется правилом ниже.
+          'address': ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
           'mtu': settings.mtu,
           'auto_route': true,
           'strict_route': true,
