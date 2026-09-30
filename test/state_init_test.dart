@@ -1,0 +1,31 @@
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:skipit/core/paths.dart';
+import 'package:skipit/state/app_state.dart';
+
+/// Файл данных может быть занят при запуске (антивирус, выходящая копия программы).
+/// Подписки не должны теряться, а пустое состояние — затирать файл.
+void main() {
+  test('занятый на секунду state.json всё равно загружается', () async {
+    await AppPaths.init();
+    final tmp = await Directory.systemTemp.createTemp('skipit-test');
+    AppPaths.dataDir = tmp;
+    final file = File(AppPaths.stateFile);
+    await file.writeAsString('{"subscriptions":[{"id":"s1","url":"https://example.com/sub","name":"Test"}],'
+        '"servers":[{"id":"a","name":"A","protocol":"vless","address":"1.1.1.1","port":443,"link":"vless://x","outbound":{},"subscriptionId":"s1"}]}');
+
+    final raf = await file.open(mode: FileMode.append);
+    await raf.lock(FileLock.exclusive);
+    Future.delayed(const Duration(seconds: 1), () async {
+      await raf.unlock();
+      await raf.close();
+    });
+
+    final state = AppState();
+    await state.loadForTest();
+    expect(state.subscriptions.length, 1);
+    expect(state.servers.length, 1);
+    await tmp.delete(recursive: true);
+  });
+}

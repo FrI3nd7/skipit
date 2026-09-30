@@ -1,0 +1,64 @@
+#ifndef RUNNER_FLUTTER_WINDOW_H_
+#define RUNNER_FLUTTER_WINDOW_H_
+
+#include <flutter/dart_project.h>
+#include <flutter/encodable_value.h>
+#include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
+#include <shellapi.h>
+
+#include <memory>
+#include <string>
+
+#include "win32_window.h"
+
+// Окно с Flutter-интерфейсом и значком в системном трее.
+// Трей управляется из Dart через канал "skipit/tray" (lib/core/tray.dart).
+class FlutterWindow : public Win32Window {
+ public:
+  // Creates a new FlutterWindow hosting a Flutter view running |project|.
+  explicit FlutterWindow(const flutter::DartProject& project);
+  virtual ~FlutterWindow();
+
+ protected:
+  // Win32Window:
+  bool OnCreate() override;
+  void OnDestroy() override;
+  LRESULT MessageHandler(HWND window, UINT const message, WPARAM const wparam,
+                         LPARAM const lparam) noexcept override;
+
+ private:
+  // Положение и размер окна между запусками (реестр HKCU\Software\SkipIt).
+  void RestorePlacement();
+  void SavePlacement();
+
+  void AddTrayIcon();
+  void RemoveTrayIcon();
+  void ShowFromTray();
+  void ShowTrayMenu();
+  void HandleTrayCall(
+      const flutter::MethodCall<flutter::EncodableValue>& call,
+      std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
+
+  // The project to run.
+  flutter::DartProject project_;
+
+  // The Flutter instance hosted by this window.
+  std::unique_ptr<flutter::FlutterViewController> flutter_controller_;
+
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>> tray_channel_;
+  NOTIFYICONDATAW tray_icon_{};
+  bool tray_added_ = false;
+  // Крестик прячет окно в трей вместо выхода (настройка приходит из Dart).
+  bool close_to_tray_ = true;
+  // В прошлый раз окно было развёрнуто на весь экран.
+  bool start_maximized_ = false;
+  // Идёт перетаскивание/изменение размера — сохраняем только в конце.
+  bool in_size_move_ = false;
+  // Подписи меню приходят из Dart; до этого — запасные английские.
+  std::wstring label_open_ = L"Open";
+  std::wstring label_toggle_ = L"Connect";
+  std::wstring label_exit_ = L"Exit";
+};
+
+#endif  // RUNNER_FLUTTER_WINDOW_H_

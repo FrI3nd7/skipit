@@ -1,0 +1,6 @@
+analyzer:
+  exclude:
+    - build/**
+    - windows/**
+  language:
+    strict-casts: false

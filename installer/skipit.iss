@@ -1,0 +1,93 @@
+; Установщик SkipIt (Inno Setup 6/7).
+; Собирается скриптом tools\build.ps1: версия передаётся через /DAppVersion=... (из тега релиза).
+;   ISCC.exe /DAppVersion=1.0.1 installer\skipit.iss
+
+#ifndef AppVersion
+  #define AppVersion "1.0.0a"
+#endif
+#define AppName "SkipIt"
+#define AppExe "SkipIt.exe"
+#define Release "..\build\windows\x64\runner\Release"
+
+[Setup]
+AppId={{6E2D5B1A-7C3F-4B8E-9A41-5F0C2D8E3B17}
+AppName={#AppName}
+AppVersion={#AppVersion}
+AppVerName={#AppName} {#AppVersion}
+AppPublisher=SkipIt
+AppPublisherURL=https://github.com/FrI3nd7/skipit
+AppSupportURL=https://github.com/FrI3nd7/skipit/issues
+AppUpdatesURL=https://github.com/FrI3nd7/skipit/releases
+DefaultDirName={autopf}\{#AppName}
+DefaultGroupName={#AppName}
+DisableProgramGroupPage=yes
+; Режим TUN всё равно требует прав администратора, поэтому ставим в Program Files.
+PrivilegesRequired=admin
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+OutputDir=..\build\installer
+OutputBaseFilename=SkipIt-Setup-{#AppVersion}
+SetupIconFile=..\windows\runner\resources\app_icon.ico
+UninstallDisplayIcon={app}\{#AppExe}
+UninstallDisplayName={#AppName}
+Compression=lzma2/ultra64
+SolidCompression=yes
+WizardStyle=modern
+; Если программа всё же запущена — закрыть её перед заменой файлов.
+CloseApplications=force
+RestartApplications=no
+
+[Languages]
+Name: "russian"; MessagesFile: "compiler:Languages\Russian.isl"
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+
+[Files]
+Source: "{#Release}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\core\xray.exe"; DestDir: "{app}\core"; Flags: ignoreversion
+Source: "..\core\sing-box.exe"; DestDir: "{app}\core"; Flags: ignoreversion
+
+[Icons]
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
+Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
+
+[Run]
+Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+
+[Registry]
+; Эти ключи создаёт сама программа (автозапуск, ссылки skipit://, положение окна) — убираем при удалении.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "SkipIt"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\skipit"; ValueType: none; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\SkipIt"; ValueType: none; Flags: uninsdeletekey
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\core"
+
+[Code]
+// Перед установкой и удалением просим запущенный SkipIt корректно выйти: он отключит VPN
+// и вернёт системный прокси. Просто «убить» процесс нельзя — у пользователя пропал бы интернет.
+procedure QuitRunningApp();
+var
+  Code: Integer;
+begin
+  if FileExists(ExpandConstant('{app}\{#AppExe}')) then
+  begin
+    Exec(ExpandConstant('{app}\{#AppExe}'), '--quit', '', SW_HIDE, ewWaitUntilTerminated, Code);
+    Sleep(2500);
+  end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  QuitRunningApp();
+  Result := '';
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if CurUninstallStep = usUninstall then
+    QuitRunningApp();
+end;

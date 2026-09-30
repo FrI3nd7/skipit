@@ -1,0 +1,69 @@
+# Сборка SkipIt на серверах GitHub.
+#
+# Как выпустить версию: Releases → Draft a new release → тег (например 1.0.1a) →
+# при необходимости галочка «Set as a pre-release» (увидят только пользователи канала «Бета») → Publish.
+# Сценарий соберёт программу этой версии и прикрепит к релизу SkipIt-Setup-<версия>.exe —
+# SkipIt у пользователей найдёт его через «Проверить обновления».
+#
+# Push в main — просто проверочная сборка (архив в Actions → Artifacts), без релиза.
+name: Build
+
+on:
+  release:
+    types: [published]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Версия
+        id: ver
+        shell: pwsh
+        run: |
+          $tag = '${{ github.event.release.tag_name }}'
+          $v = if ($tag) { $tag -replace '^v', '' } else { '' }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Ядра Xray и sing-box
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./tools/setup.ps1
+
+      - name: Тесты
+        run: flutter test
+
+      - name: Сборка программы и установщика
+        shell: pwsh
+        run: |
+          $v = '${{ steps.ver.outputs.version }}'
+          if ($v) { ./tools/build.ps1 -Version $v } else { ./tools/build.ps1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SkipIt-Setup
+          path: build/installer/*.exe
+
+      - name: Прикрепить установщик к релизу
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload '${{ github.event.release.tag_name }}' (Get-ChildItem build/installer/*.exe).FullName --clobber

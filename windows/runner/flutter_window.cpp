@@ -1,0 +1,300 @@
+#include "flutter_window.h"
+
+#include <flutter/standard_method_codec.h>
+
+#include <optional>
+
+#include "flutter/generated_plugin_registrant.h"
+#include "resource.h"
+
+namespace {
+
+constexpr UINT kTrayMessage = WM_APP + 1;
+// Отложенное закрытие по команде "quit" из Dart (после того как Dart всё остановил).
+constexpr UINT kQuitMessage = WM_APP + 2;
+constexpr UINT kCmdOpen = 1;
+constexpr UINT kCmdToggle = 2;
+constexpr UINT kCmdExit = 3;
+constexpr wchar_t kRegKey[] = L"Software\\SkipIt";
+constexpr wchar_t kRegPlacement[] = L"WindowPlacement";
+
+std::wstring Utf8ToWide(const std::string& s) {
+  if (s.empty()) return std::wstring();
+  const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+  std::wstring w(n, L'\0');
+  MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), w.data(), n);
+  return w;
+}
+
+}  // namespace
+
+FlutterWindow::FlutterWindow(const flutter::DartProject& project)
+    : project_(project) {}
+
+FlutterWindow::~FlutterWindow() {}
+
+bool FlutterWindow::OnCreate() {
+  if (!Win32Window::OnCreate()) {
+    return false;
+  }
+
+  // До создания Flutter-вида: размер поверхности должен совпасть с восстановленным окном.
+  RestorePlacement();
+
+  RECT frame = GetClientArea();
+
+  // The size here must match the window dimensions to avoid unnecessary surface
+  // creation / destruction in the startup path.
+  flutter_controller_ = std::make_unique<flutter::FlutterViewController>(
+      frame.right - frame.left, frame.bottom - frame.top, project_);
+  // Ensure that basic setup of the controller was successful.
+  if (!flutter_controller_->engine() || !flutter_controller_->view()) {
+    return false;
+  }
+  RegisterPlugins(flutter_controller_->engine());
+  SetChildContent(flutter_controller_->view()->GetNativeWindow());
+
+  tray_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "skipit/tray",
+      &flutter::StandardMethodCodec::GetInstance());
+  tray_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+        HandleTrayCall(call, std::move(result));
+      });
+  AddTrayIcon();
+
+  // При автозапуске с Windows окно не показываем — программа сразу живёт в трее.
+  const bool start_hidden = wcsstr(GetCommandLineW(), L"--autostart") != nullptr;
+  flutter_controller_->engine()->SetNextFrameCallback([this, start_hidden]() {
+    if (start_hidden) return;
+    if (start_maximized_) {
+      ShowWindow(GetHandle(), SW_SHOWMAXIMIZED);
+    } else {
+      this->Show();
+    }
+  });
+
+  // Flutter can complete the first frame before the "show window" callback is
+  // registered. The following call ensures a frame is pending to ensure the
+  // window is shown. It is a no-op if the first frame hasn't completed yet.
+  flutter_controller_->ForceRedraw();
+
+  return true;
+}
+
+void FlutterWindow::OnDestroy() {
+  RemoveTrayIcon();
+  tray_channel_ = nullptr;
+  if (flutter_controller_) {
+    flutter_controller_ = nullptr;
+  }
+
+  Win32Window::OnDestroy();
+}
+
+void FlutterWindow::RestorePlacement() {
+  WINDOWPLACEMENT wp{};
+  DWORD size = sizeof(wp);
+  if (RegGetValueW(HKEY_CURRENT_USER, kRegKey, kRegPlacement, RRF_RT_REG_BINARY, nullptr, &wp, &size) !=
+          ERROR_SUCCESS ||
+      size != sizeof(wp)) {
+    return;
+  }
+  // Монитор, на котором было окно, могли отключить — тогда остаёмся на месте по умолчанию.
+  if (MonitorFromRect(&wp.rcNormalPosition, MONITOR_DEFAULTTONULL) == nullptr) return;
+  if (wp.rcNormalPosition.right - wp.rcNormalPosition.left < 400 ||
+      wp.rcNormalPosition.bottom - wp.rcNormalPosition.top < 300) {
+    return;
+  }
+  start_maximized_ = wp.showCmd == SW_SHOWMAXIMIZED;
+  wp.length = sizeof(wp);
+  wp.showCmd = SW_HIDE;  // Показывает окно Flutter после первого кадра.
+  wp.flags = 0;
+  SetWindowPlacement(GetHandle(), &wp);
+}
+
+void FlutterWindow::SavePlacement() {
+  HWND hwnd = GetHandle();
+  if (!hwnd || !IsWindowVisible(hwnd)) return;
+  WINDOWPLACEMENT wp{};
+  wp.length = sizeof(wp);
+  if (!GetWindowPlacement(hwnd, &wp)) return;
+  // Свёрнутое окно запоминаем обычным: открываться свёрнутым оно не должно.
+  if (wp.showCmd == SW_SHOWMINIMIZED) wp.showCmd = SW_SHOWNORMAL;
+  HKEY key;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) ==
+      ERROR_SUCCESS) {
+    RegSetValueExW(key, kRegPlacement, 0, REG_BINARY, reinterpret_cast<const BYTE*>(&wp), sizeof(wp));
+    RegCloseKey(key);
+  }
+}
+
+void FlutterWindow::AddTrayIcon() {
+  tray_icon_.cbSize = sizeof(tray_icon_);
+  tray_icon_.hWnd = GetHandle();
+  tray_icon_.uID = 1;
+  tray_icon_.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+  tray_icon_.uCallbackMessage = kTrayMessage;
+  tray_icon_.hIcon = static_cast<HICON>(LoadImageW(
+      GetModuleHandle(nullptr), MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
+      GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
+  if (tray_icon_.szTip[0] == L'\0') wcscpy_s(tray_icon_.szTip, L"SkipIt");
+  tray_added_ = Shell_NotifyIconW(NIM_ADD, &tray_icon_) != FALSE;
+}
+
+void FlutterWindow::RemoveTrayIcon() {
+  if (!tray_added_) return;
+  Shell_NotifyIconW(NIM_DELETE, &tray_icon_);
+  tray_added_ = false;
+}
+
+void FlutterWindow::ShowFromTray() {
+  HWND hwnd = GetHandle();
+  ShowWindow(hwnd, IsIconic(hwnd) ? SW_RESTORE : SW_SHOW);
+  SetForegroundWindow(hwnd);
+}
+
+void FlutterWindow::ShowTrayMenu() {
+  HMENU menu = CreatePopupMenu();
+  AppendMenuW(menu, MF_STRING, kCmdOpen, label_open_.c_str());
+  AppendMenuW(menu, MF_STRING, kCmdToggle, label_toggle_.c_str());
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_STRING, kCmdExit, label_exit_.c_str());
+  SetMenuDefaultItem(menu, kCmdOpen, FALSE);
+
+  POINT pt;
+  GetCursorPos(&pt);
+  // Без этого меню не закрывается при клике мимо него (особенность Windows).
+  SetForegroundWindow(GetHandle());
+  const UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
+                                  pt.x, pt.y, 0, GetHandle(), nullptr);
+  DestroyMenu(menu);
+  PostMessage(GetHandle(), WM_NULL, 0, 0);
+
+  switch (cmd) {
+    case kCmdOpen:
+      ShowFromTray();
+      break;
+    case kCmdToggle:
+      if (tray_channel_) tray_channel_->InvokeMethod("toggle", nullptr);
+      break;
+    case kCmdExit:
+      if (tray_channel_) tray_channel_->InvokeMethod("exit", nullptr);
+      break;
+  }
+}
+
+void FlutterWindow::HandleTrayCall(
+    const flutter::MethodCall<flutter::EncodableValue>& call,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  const std::string& method = call.method_name();
+  if (method == "update") {
+    if (const auto* args = std::get_if<flutter::EncodableMap>(call.arguments())) {
+      auto text = [args](const char* key) -> std::optional<std::wstring> {
+        auto it = args->find(flutter::EncodableValue(key));
+        if (it == args->end()) return std::nullopt;
+        if (const auto* s = std::get_if<std::string>(&it->second)) return Utf8ToWide(*s);
+        return std::nullopt;
+      };
+      if (auto tip = text("tooltip")) {
+        wcsncpy_s(tray_icon_.szTip, tip->c_str(), _TRUNCATE);
+        if (tray_added_) {
+          tray_icon_.uFlags = NIF_TIP;
+          Shell_NotifyIconW(NIM_MODIFY, &tray_icon_);
+          tray_icon_.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+        }
+      }
+      if (auto v = text("open")) label_open_ = *v;
+      if (auto v = text("toggle")) label_toggle_ = *v;
+      if (auto v = text("exit")) label_exit_ = *v;
+      auto it = args->find(flutter::EncodableValue("closeToTray"));
+      if (it != args->end()) {
+        if (const auto* b = std::get_if<bool>(&it->second)) close_to_tray_ = *b;
+      }
+    }
+    result->Success();
+  } else if (method == "show") {
+    ShowFromTray();
+    result->Success();
+  } else if (method == "hide") {
+    ShowWindow(GetHandle(), SW_HIDE);
+    result->Success();
+  } else if (method == "quit") {
+    // Значок убираем сразу — Dart может вызвать exit() сразу после ответа.
+    RemoveTrayIcon();
+    result->Success();
+    PostMessage(GetHandle(), kQuitMessage, 0, 0);
+  } else {
+    result->NotImplemented();
+  }
+}
+
+LRESULT
+FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
+                              WPARAM const wparam,
+                              LPARAM const lparam) noexcept {
+  // После перезапуска Проводника значки трея пропадают — добавляем заново.
+  static const UINT taskbar_created = RegisterWindowMessageW(L"TaskbarCreated");
+  if (message == taskbar_created) {
+    tray_added_ = false;
+    AddTrayIcon();
+    return 0;
+  }
+
+  switch (message) {
+    case WM_ENTERSIZEMOVE:
+      in_size_move_ = true;
+      break;
+    case WM_EXITSIZEMOVE:
+      in_size_move_ = false;
+      SavePlacement();
+      break;
+    case WM_SIZE:
+      // Развернули/восстановили кнопкой — перетаскивания не было, сохраняем сразу.
+      if (!in_size_move_ && (wparam == SIZE_MAXIMIZED || wparam == SIZE_RESTORED)) SavePlacement();
+      break;
+    case WM_CLOSE:
+      SavePlacement();
+      // Крестик прячет окно в трей; VPN продолжает работать.
+      if (close_to_tray_ && tray_added_) {
+        ShowWindow(hwnd, SW_HIDE);
+        return 0;
+      }
+      break;
+    case kTrayMessage:
+      switch (LOWORD(lparam)) {
+        case WM_LBUTTONUP:
+        case WM_LBUTTONDBLCLK:
+          ShowFromTray();
+          break;
+        case WM_RBUTTONUP:
+        case WM_CONTEXTMENU:
+          ShowTrayMenu();
+          break;
+      }
+      return 0;
+    case kQuitMessage:
+      SavePlacement();
+      DestroyWindow(hwnd);
+      return 0;
+  }
+
+  // Give Flutter, including plugins, an opportunity to handle window messages.
+  if (flutter_controller_) {
+    std::optional<LRESULT> result =
+        flutter_controller_->HandleTopLevelWindowProc(hwnd, message, wparam,
+                                                      lparam);
+    if (result) {
+      return *result;
+    }
+  }
+
+  switch (message) {
+    case WM_FONTCHANGE:
+      flutter_controller_->engine()->ReloadSystemFonts();
+      break;
+  }
+
+  return Win32Window::MessageHandler(hwnd, message, wparam, lparam);
+}
