@@ -353,7 +353,7 @@ class _Sidebar extends StatelessWidget {
               height: 46,
               child: Align(
                 alignment: Alignment.bottomCenter,
-                child: _VersionRow(wide: wide, onOpenSettings: () => onSelect(items.length - 1)),
+                child: _VersionRow(wide: wide),
               ),
             ),
           ]),
@@ -517,11 +517,10 @@ class _SmoothPage extends StatelessWidget {
       );
 }
 
-/// Версия внизу меню + проверка обновлений. Если что-то нашлось — оранжевая пометка, клик ведёт в Настройки.
+/// Версия внизу меню + проверка обновлений. Если что-то нашлось — оранжевая пометка, клик ставит обновление.
 class _VersionRow extends StatelessWidget {
-  const _VersionRow({required this.wide, required this.onOpenSettings});
+  const _VersionRow({required this.wide});
   final bool wide;
-  final VoidCallback onOpenSettings;
 
   @override
   Widget build(BuildContext context) {
@@ -537,7 +536,14 @@ class _VersionRow extends StatelessWidget {
       message: tooltip,
       child: Hover(
         builder: (context, hovered) => GestureDetector(
-          onTap: state.checkingUpdates ? null : (hasUpdate ? onOpenSettings : state.checkUpdates),
+          // Есть обновление — кнопка сразу его ставит (с подтверждением), а не уводит в настройки.
+          onTap: state.checkingUpdates
+              ? null
+              : !hasUpdate
+                  ? state.checkUpdates
+                  : state.availableUpdates.containsKey('app')
+                      ? () => installAppUpdate(context)
+                      : state.installCoreUpdates,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
             height: 28,

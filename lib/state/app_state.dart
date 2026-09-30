@@ -730,7 +730,9 @@ class AppState extends ChangeNotifier {
         try {
           final r = await Updates.latest(appRepo,
               proxyPort: _updateProxy, prerelease: settings.updateChannel == UpdateChannel.beta);
-          if (Updates.compare(r.version, appVersion) > 0) availableUpdates['app'] = r;
+          // Релиз без установщика — значит, GitHub его ещё собирает: не предлагаем, пока не будет готов.
+          final hasInstaller = r.assetMatching(RegExp(r'^SkipIt-Setup.*\.exe$', caseSensitive: false)) != null;
+          if (hasInstaller && Updates.compare(r.version, appVersion) > 0) availableUpdates['app'] = r;
         } catch (e) {
           errors.add('SkipIt: $e');
         }
