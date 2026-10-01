@@ -244,6 +244,17 @@ class _DayGroupState extends State<_DayGroup> {
   bool get open => widget.open;
   ValueChanged<bool> get onToggle => widget.onToggle;
 
+  /// Подсветка скользит, только когда выбор переходит между журналами этого же дня. Если до этого
+  /// был выбран журнал другого дня, она сразу проявляется на нажатой строке, а не едет к ней
+  /// от места, где стояла когда-то раньше.
+  bool _slide = false;
+
+  @override
+  void didUpdateWidget(_DayGroup old) {
+    super.didUpdateWidget(old);
+    if (old.selectedIndex != widget.selectedIndex) _slide = old.selectedIndex >= 0 && widget.selectedIndex >= 0;
+  }
+
   @override
   Widget build(BuildContext context) {
     final here = widget.selectedIndex >= 0;
@@ -303,7 +314,7 @@ class _DayGroupState extends State<_DayGroup> {
           // Подсветка выбранного журнала — одна на день и «скользит» к новому, как в боковом меню.
           child: Stack(fit: StackFit.passthrough, children: [
             AnimatedPositioned(
-              duration: const Duration(milliseconds: 240),
+              duration: Duration(milliseconds: _slide ? 240 : 0),
               curve: Curves.easeOutCubic,
               top: _last * _SessionTile.height,
               left: 0,
