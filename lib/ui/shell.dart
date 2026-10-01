@@ -465,15 +465,8 @@ class _Sidebar extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 8),
-            // Фиксированная высота: в свёрнутом меню строка складывается в столбик, а блок статуса
-            // над ней не должен смещаться.
-            SizedBox(
-              height: 46,
-              child: Align(
-                alignment: Alignment.bottomCenter,
-                child: _VersionRow(wide: wide),
-              ),
-            ),
+            _VersionRow(collapsed: collapsed),
+
           ]),
         );
       }),
@@ -630,26 +623,34 @@ class _SmoothPage extends StatelessWidget {
       );
 }
 
-/// Версия внизу меню + проверка обновлений. Если что-то нашлось — оранжевая пометка, клик ставит обновление.
+/// Версия внизу меню + проверка обновлений. Одна раскладка для свёрнутого и развёрнутого меню:
+/// значок стоит на месте (под значками пунктов), подпись выезжает из-под него — ничего не прыгает.
+/// Если нашлось обновление — строка оранжевая, клик его ставит.
 class _VersionRow extends StatelessWidget {
-  const _VersionRow({required this.wide});
-  final bool wide;
+  const _VersionRow({required this.collapsed});
+  final bool collapsed;
+
+  static const _height = 46.0;
 
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
     final hasUpdate = state.appUpdate != null;
-    final tooltip = state.checkingUpdates
+    final title = 'Версия $appVersion${AppPaths.isDev ? ' dev' : ''}';
+    final action = state.checkingUpdates
         ? 'Проверяю обновления…'
         : hasUpdate
-            ? 'Установить SkipIt ${state.appUpdate!.version}'
+            ? 'Установить ${state.appUpdate!.version}'
             : 'Проверить обновления';
 
-    final button = Tooltip(
-      message: tooltip,
+    return Tooltip(
+      // В свёрнутом меню подписи не видно — она переезжает в подсказку.
+      message: collapsed ? '$title\n$action' : '',
+      waitDuration: const Duration(milliseconds: 300),
       child: Hover(
         builder: (context, hovered) => GestureDetector(
-          // Есть обновление — кнопка сразу его ставит (с подтверждением), а не уводит в настройки.
+          behavior: HitTestBehavior.opaque,
+          // Есть обновление — строка сразу его ставит (с подтверждением), а не уводит в настройки.
           onTap: state.checkingUpdates
               ? null
               : hasUpdate
@@ -657,43 +658,56 @@ class _VersionRow extends StatelessWidget {
                   : state.checkUpdates,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
-            height: 28,
-            padding: EdgeInsets.symmetric(horizontal: hasUpdate && wide ? 10 : 6),
+            height: _height,
             decoration: BoxDecoration(
               color: hasUpdate ? C.orange.withValues(alpha: 0.14) : (hovered ? C.hover : Colors.transparent),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: hasUpdate || hovered ? C.orange.withValues(alpha: 0.5) : Colors.transparent),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: hasUpdate ? C.orange.withValues(alpha: 0.5) : Colors.transparent),
             ),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              if (state.checkingUpdates)
-                const Spinner(size: 16, icon: Icons.sync_rounded)
-              else
-                Icon(hasUpdate ? Icons.download_rounded : Icons.sync_rounded,
-                    size: 16, color: hasUpdate || hovered ? C.orange : C.muted),
-              if (hasUpdate && wide) ...[
-                const SizedBox(width: 6),
-                const Text('Обновление',
-                    style: TextStyle(color: C.orange, fontSize: 11, fontWeight: FontWeight.w700)),
-              ],
+            child: Row(children: [
+              const SizedBox(width: 13),
+              SizedBox(
+                width: 20,
+                child: Center(
+                  child: state.checkingUpdates
+                      ? const Spinner(size: 18, icon: Icons.sync_rounded)
+                      : Icon(hasUpdate ? Icons.download_rounded : Icons.sync_rounded,
+                          size: 18, color: hasUpdate || hovered ? C.orange : C.muted),
+                ),
+              ),
+              Expanded(
+                child: SlideLabel(
+                  collapsed: collapsed,
+                  height: _height,
+                  child: Padding(
+                    padding: const EdgeInsets.only(left: 12),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(title,
+                            maxLines: 1,
+                            softWrap: false,
+                            style: TextStyle(
+                                color: hovered || hasUpdate ? C.text : C.muted,
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w700)),
+                        Text(action,
+                            maxLines: 1,
+                            softWrap: false,
+                            style: TextStyle(color: hasUpdate || hovered ? C.orange : C.muted, fontSize: 11)),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
             ]),
           ),
         ),
       ),
     );
-
-    final version = Text(wide ? 'v$appVersion${AppPaths.isDev ? ' dev' : ''}' : appVersion,
-        maxLines: 1,
-        style: TextStyle(color: C.muted, fontSize: wide ? 12.5 : 11, fontWeight: FontWeight.w700, letterSpacing: 0.3));
-
-    return wide
-        ? Padding(
-            padding: const EdgeInsets.only(left: 6),
-            child: Row(children: [version, const Spacer(), button]),
-          )
-        : Column(children: [button, const SizedBox(height: 2), version]);
   }
-}
-class _PasteIntent extends Intent {
+}class _PasteIntent extends Intent {
   const _PasteIntent();
 }
 
