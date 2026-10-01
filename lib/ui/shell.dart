@@ -152,25 +152,16 @@ class _ShellState extends State<Shell> {
     super.didChangeDependencies();
     _sub ??= AppScope.read(context).messages.listen((msg) {
       if (!mounted) return;
-      final messenger = ScaffoldMessenger.of(context);
-      messenger
-        ..hideCurrentSnackBar()
-        ..showSnackBar(SnackBar(
-          // Уведомление закрывается кликом по нему или по крестику.
-          content: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: messenger.hideCurrentSnackBar,
-            child: MouseRegion(cursor: SystemMouseCursors.click, child: Text(msg)),
-          ),
-          showCloseIcon: true,
-          closeIconColor: C.muted,
-          width: 520,
-          // И сами исчезают через 4 секунды.
-          persist: false,
-          duration: const Duration(seconds: 4),
-        ));
+      // Новое уведомление вытесняет прежнее: то плавно уходит, это всплывает на его место.
+      _toast?.currentState?.dismiss();
+      final key = _toast = GlobalKey<_ToastState>();
+      late final OverlayEntry entry;
+      entry = OverlayEntry(builder: (_) => _Toast(key: key, text: msg, onGone: entry.remove));
+      Overlay.of(context, rootOverlay: true).insert(entry);
     });
   }
+
+  GlobalKey<_ToastState>? _toast;
 
   @override
   void initState() {
@@ -263,6 +254,108 @@ class _ShellState extends State<Shell> {
       ),
     );
   }
+}
+
+/// Всплывающее уведомление внизу окна: плавно поднимается и проявляется, через 4 секунды так же
+/// плавно уходит вниз. Закрывается кликом по нему или по крестику; пока на нём курсор — не исчезает.
+class _Toast extends StatefulWidget {
+  const _Toast({super.key, required this.text, required this.onGone});
+  final String text;
+
+  /// Уведомление полностью ушло с экрана — его можно убирать.
+  final VoidCallback onGone;
+
+  @override
+  State<_Toast> createState() => _ToastState();
+}
+
+class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
+  late final _anim = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 320),
+    reverseDuration: const Duration(milliseconds: 220),
+  );
+  late final _move = CurvedAnimation(parent: _anim, curve: Curves.easeOutCubic, reverseCurve: Curves.easeInCubic);
+  Timer? _timer;
+  bool _leaving = false;
+
+  void _arm() {
+    _timer?.cancel();
+    _timer = Timer(const Duration(seconds: 4), dismiss);
+  }
+
+  void dismiss() {
+    if (_leaving || !mounted) return;
+    _leaving = true;
+    _timer?.cancel();
+    _anim.reverse().whenComplete(widget.onGone);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _anim.forward();
+    _arm();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    _move.dispose();
+    _anim.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Positioned(
+        left: 16,
+        right: 16,
+        bottom: 14,
+        child: Center(
+          child: AnimatedBuilder(
+            animation: _move,
+            builder: (context, child) => Opacity(
+              opacity: _move.value,
+              child: Transform.translate(
+                offset: Offset(0, 18 * (1 - _move.value)),
+                child: Transform.scale(scale: 0.96 + 0.04 * _move.value, child: child),
+              ),
+            ),
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              onEnter: (_) => _timer?.cancel(),
+              onExit: (_) {
+                if (!_leaving) _arm();
+              },
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: dismiss,
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: Container(
+                    constraints: const BoxConstraints(maxWidth: 520),
+                    padding: const EdgeInsets.fromLTRB(16, 12, 10, 12),
+                    decoration: BoxDecoration(
+                      color: C.surface2,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: C.border),
+                      boxShadow: [BoxShadow(color: C.palette.shadow, blurRadius: 24, offset: const Offset(0, 8))],
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Flexible(child: Text(widget.text, style: TextStyle(color: C.text, fontSize: 14))),
+                      const SizedBox(width: 12),
+                      Hover(
+                        builder: (context, hovered) =>
+                            Icon(Icons.close_rounded, size: 18, color: hovered ? C.text : C.muted),
+                      ),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 /// Боковое меню — «плавающая» карточка; сворачивается до полоски с иконками.
