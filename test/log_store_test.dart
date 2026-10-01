@@ -50,6 +50,11 @@ void main() {
     expect(LogExplain.of('xray', 'The "freedom.domainStrategy" setting is deprecated'), contains('устаревший'));
     expect(LogExplain.of('sing-box', 'open interface take too much time'), contains('адаптер'));
     expect(LogExplain.of('app', 'Ошибка подключения: timeout'), isNull);
+    // Программа сама закрыла соединение через адаптер: пояснение есть, но ошибкой это не считается.
+    const reset = '2026/10/02 02:09:32.664688 [Error] proxy/tun: connection reset by peer';
+    expect(LogExplain.of('xray', reset), contains('сама оборвала'));
+    expect(LogLine('xray', reset).level, 0);
+    expect(LogLine('xray', '[Error] app/dns: failed to retrieve response').level, 2);
     expect(
         LogExplain.of('xray', '[Warning] app/observatory/burst: error ping https://www.gstatic.com/generate_204 with proxy-2: Head: context deadline exceeded'),
         contains('«proxy-2»'));
