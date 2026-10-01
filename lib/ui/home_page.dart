@@ -195,7 +195,7 @@ class _TunCorePicker extends StatelessWidget {
           builder: (context, hovered) => GestureDetector(
             behavior: HitTestBehavior.opaque,
             onTap: () async {
-              final picked = await showAppMenu<TunCore>(context, matchWidth: true, items: [
+              final picked = await showAppMenu<TunCore>(context, centered: true, items: [
                 AppMenuItem(TunCore.singbox, 'sing-box', checked: value == TunCore.singbox),
                 AppMenuItem(TunCore.xray, 'Xray', checked: value == TunCore.xray),
               ]);

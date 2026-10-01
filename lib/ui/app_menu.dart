@@ -35,28 +35,38 @@ class AppMenuItem<T> {
 
 /// Всплывающее меню в стиле приложения. Появляется под виджетом [context] (правый край к правому краю,
 /// как у кнопок «…»), либо у точки [at] — для меню по правому клику. [matchWidth] — меню не уже
-/// самого виджета и выровнено по левому краю (выпадающие списки).
+/// самого виджета и выровнено по левому краю (выпадающие списки). [centered] — меню стоит по центру
+/// под виджетом (маленькие кнопки-переключатели посреди экрана).
 Future<T?> showAppMenu<T>(
   BuildContext context, {
   required List<AppMenuItem<T>> items,
   Offset? at,
   bool matchWidth = false,
+  bool centered = false,
 }) {
   final box = context.findRenderObject() as RenderBox;
   final anchor = at != null ? (at & Size.zero) : (box.localToGlobal(Offset.zero) & box.size);
   return Navigator.of(context, rootNavigator: true).push(_MenuRoute<T>(
     items: items,
     anchor: anchor,
-    alignRight: at == null && !matchWidth,
+    alignRight: at == null && !matchWidth && !centered,
+    centered: centered,
     minWidth: matchWidth ? anchor.width : 0,
   ));
 }
 
 class _MenuRoute<T> extends PopupRoute<T> {
-  _MenuRoute({required this.items, required this.anchor, required this.alignRight, required this.minWidth});
+  _MenuRoute({
+    required this.items,
+    required this.anchor,
+    required this.alignRight,
+    required this.centered,
+    required this.minWidth,
+  });
   final List<AppMenuItem<T>> items;
   final Rect anchor;
   final bool alignRight;
+  final bool centered;
   final double minWidth;
 
   @override
@@ -75,7 +85,7 @@ class _MenuRoute<T> extends PopupRoute<T> {
   Widget buildPage(BuildContext context, Animation<double> animation, Animation<double> secondaryAnimation) {
     // Только плавное проявление, без изменения размера и сдвига: иначе меню при открытии «скачет».
     return CustomSingleChildLayout(
-      delegate: _MenuLayout(anchor, alignRight),
+      delegate: _MenuLayout(anchor, alignRight, centered),
       child: FadeTransition(
         opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
         child: _MenuCard<T>(items: items, minWidth: minWidth),
@@ -86,9 +96,10 @@ class _MenuRoute<T> extends PopupRoute<T> {
 
 /// Меню под виджетом; если снизу не помещается — над ним. За края окна не выходит.
 class _MenuLayout extends SingleChildLayoutDelegate {
-  _MenuLayout(this.anchor, this.alignRight);
+  _MenuLayout(this.anchor, this.alignRight, this.centered);
   final Rect anchor;
   final bool alignRight;
+  final bool centered;
 
   static const _margin = 8.0;
   static const _gap = 6.0;
@@ -99,7 +110,9 @@ class _MenuLayout extends SingleChildLayoutDelegate {
 
   @override
   Offset getPositionForChild(Size size, Size child) {
-    var x = alignRight ? anchor.right - child.width : anchor.left;
+    var x = centered
+        ? anchor.center.dx - child.width / 2
+        : (alignRight ? anchor.right - child.width : anchor.left);
     var y = anchor.bottom + _gap;
     if (y + child.height > size.height - _margin && anchor.top - _gap - child.height >= _margin) {
       y = anchor.top - _gap - child.height;
@@ -110,7 +123,8 @@ class _MenuLayout extends SingleChildLayoutDelegate {
   }
 
   @override
-  bool shouldRelayout(_MenuLayout old) => old.anchor != anchor || old.alignRight != alignRight;
+  bool shouldRelayout(_MenuLayout old) =>
+      old.anchor != anchor || old.alignRight != alignRight || old.centered != centered;
 }
 
 class _MenuCard<T> extends StatelessWidget {
