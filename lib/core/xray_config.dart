@@ -355,30 +355,78 @@ class XrayConfig {
       if (!settings.ipv6) {'inboundTag': inbound, 'ip': ['::/0'], 'outboundTag': block},
     ];
 
-    // Запись списка — имя процесса, путь или папка с прямыми слэшами: Xray понимает их в том же виде.
-    final listed = apps.enabledMatches;
-    switch (apps.mode) {
-      case AppRoutingMode.off:
-        break;
-      case AppRoutingMode.allExcept:
-        if (listed.isNotEmpty) own.add({'inboundTag': inbound, 'process': listed, 'outboundTag': direct});
-      case AppRoutingMode.onlySelected:
-        // Правила «все, кроме списка» в Xray нет. Поэтому для выбранных программ повторяются обычные
-        // правила, а всё остальное из адаптера идёт напрямую.
-        if (listed.isNotEmpty) {
-          for (final r in rules) {
-            if (r is Map && r['inboundTag'] == null && r['process'] == null) {
-              own.add({...r.cast<String, dynamic>(), 'inboundTag': inbound, 'process': listed}..remove('ruleTag'));
-            }
-          }
-          own.add({'inboundTag': inbound, 'process': listed, 'outboundTag': defaultTag});
-        }
-        own.add({'inboundTag': inbound, 'outboundTag': direct});
-    }
-    routing['rules'] = [...own, ...rules];
+    routing['rules'] = [
+      ...own,
+      // Правила по приложениям действуют и на адаптер, и на прокси-порты: в «Смешанном» режиме
+      // браузеры ходят через системный прокси, мимо адаптера.
+      ..._appRules(apps, [tunTag, ..._proxyInbounds], rules, defaultTag, direct),
+      ...rules,
+    ];
     cfg['routing'] = routing;
   }
 
+  static const _proxyInbounds = ['socks', 'http'];
+
+  /// Правила по приложениям для соединений, пришедших через входы [inbound].
+  /// Запись списка — имя процесса, путь или папка с прямыми слэшами: Xray понимает их в том же виде.
+  /// [alwaysVpn] — процессы, которые в режиме «только выбранные» считаются выбранными.
+  static List<Map<String, dynamic>> _appRules(
+    AppRules apps,
+    List<String> inbound,
+    List rules,
+    String defaultTag,
+    String direct, {
+    List<String> alwaysVpn = const [],
+  }) {
+    final listed = apps.enabledMatches;
+    switch (apps.mode) {
+      case AppRoutingMode.off:
+        return const [];
+      case AppRoutingMode.allExcept:
+        return [
+          if (listed.isNotEmpty) {'inboundTag': inbound, 'process': listed, 'outboundTag': direct},
+        ];
+      case AppRoutingMode.onlySelected:
+        // Правила «все, кроме списка» в Xray нет. Поэтому для выбранных программ повторяются обычные
+        // правила, а всё остальное с этих входов идёт напрямую.
+        final vpn = [...listed, ...alwaysVpn];
+        return [
+          if (vpn.isNotEmpty) ...[
+            for (final r in rules)
+              if (r is Map && r['inboundTag'] == null && r['process'] == null)
+                {...r.cast<String, dynamic>(), 'inboundTag': inbound, 'process': vpn}..remove('ruleTag'),
+            {'inboundTag': inbound, 'process': vpn, 'outboundTag': defaultTag},
+          ],
+          {'inboundTag': inbound, 'outboundTag': direct},
+        ];
+    }
+  }
+
+  /// TUN держит sing-box: правила по приложениям для трафика из адаптера применяет он сам
+  /// ([SingboxConfig]). Но через прокси-порты программы приходят в Xray напрямую, мимо sing-box
+  /// (в «Смешанном» режиме так ходят браузеры) — для них те же правила добавляются сюда.
+  static void addProxyAppRules(Map<String, dynamic> cfg, {required AppSettings settings, required AppRules apps}) {
+    if (apps.mode == AppRoutingMode.off) return;
+    const direct = 'skipit-direct';
+    final outbounds = [...(cfg['outbounds'] as List)];
+    final defaultTag = ((outbounds.first as Map)['tag'] ??= 'proxy') as String;
+    outbounds.add({
+      'tag': direct,
+      'protocol': 'freedom',
+      'streamSettings': {
+        'sockopt': {'domainStrategy': settings.ipv6 ? 'UseIP' : 'UseIPv4'},
+      },
+    });
+    cfg['outbounds'] = outbounds;
+    final routing = (cfg['routing'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final rules = [...(routing['rules'] as List? ?? const [])];
+    routing['rules'] = [
+      // Трафик выбранных программ из адаптера приходит сюда от имени sing-box — он уже отобран.
+      ..._appRules(apps, _proxyInbounds, rules, defaultTag, direct, alwaysVpn: const ['skipit-sing-box']),
+      ...rules,
+    ];
+    cfg['routing'] = routing;
+  }
   /// Конфиг для проверки задержки: на каждый сервер свой HTTP-inbound на своём порту.
   static Map<String, dynamic> buildTest(List<ServerProfile> servers, int basePort) {
     final inbounds = <Map<String, dynamic>>[];

@@ -50,6 +50,9 @@ class AppState extends ChangeNotifier {
   /// Строки журнала доступа Xray — это соединения программ: они идут в список «Подключения»,
   /// а не в общий журнал. Служебные (запросы DNS к самому ядру, статистика) пропускаются.
   bool _onXrayLine(String line) {
+    // Ядро не всегда может узнать, какая программа открыла соединение (служебный трафик Windows),
+    // и пишет об этом ошибкой на каждое такое соединение. Правилам это не мешает, а журнал забивает.
+    if (line.contains('Unables to find local process name')) return true;
     final c = ConnEntry.tryParse(line, _routes);
     if (c == null) return false;
     if (c.route != ConnRoute.dns && c.inbound != 'api') log.addConnection(c);
@@ -718,6 +721,8 @@ class AppState extends ChangeNotifier {
         ]);
         _appliedAppRules = appRules.signature;
         await _tunCleanup;
+      } else if (usesTun) {
+        XrayConfig.addProxyAppRules(config, settings: session, apps: appRules);
       }
       _routes
         ..clear()

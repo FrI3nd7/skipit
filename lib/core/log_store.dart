@@ -51,20 +51,36 @@ class ConnEntry {
   final String outbound;
   final ConnRoute route;
 
-  static final _access = RegExp(r'from \S+ accepted (?:(tcp|udp):)?(\S+):(\d+)(?: \[(.+?)\])?');
+  static final _access = RegExp(r'from \S+ accepted (\S+)(?: \[(.+?)\])?');
+  static final _target = RegExp(r'^(?:(tcp|udp):)?(.+):(\d+)$');
 
   /// Разбирает строку журнала доступа Xray:
   /// `… from 127.0.0.1:51234 accepted tcp:example.com:443 [socks -> proxy]`.
+  /// Обычный HTTP через прокси-порт ядро пишет полным адресом страницы
+  /// (`accepted http://example.com/path?query`) — от него остаётся только сайт и порт.
   /// [routes] — что означает каждый выход конфига. null — это не строка о соединении.
   static ConnEntry? tryParse(String line, Map<String, ConnRoute> routes) {
     final m = _access.firstMatch(line);
     if (m == null) return null;
-    final tags = (m.group(4) ?? '').split(RegExp(r'\s*(?:->|>>)\s*'));
+    final tags = (m.group(2) ?? '').split(RegExp(r'\s*(?:->|>>)\s*'));
     final outbound = tags.length > 1 ? tags.last.trim() : '';
+    var network = 'tcp', host = m.group(1)!, port = 0;
+    final url = host.contains('://') ? Uri.tryParse(host) : null;
+    // HTTPS через прокси-порт (CONNECT) записан как //example.com:443.
+    if (host.startsWith('//')) host = host.substring(2);
+    final t = _target.firstMatch(host);
+    if (url != null && url.host.isNotEmpty) {
+      host = url.host;
+      port = url.port;
+    } else if (t != null) {
+      network = t.group(1) ?? 'tcp';
+      host = t.group(2)!;
+      port = int.parse(t.group(3)!);
+    }
     return ConnEntry(
-      network: m.group(1) ?? 'tcp',
-      host: m.group(2)!,
-      port: int.parse(m.group(3)!),
+      network: network,
+      host: host,
+      port: port,
       inbound: tags.first.trim(),
       outbound: outbound,
       route: routes[outbound] ?? ConnRoute.proxy,

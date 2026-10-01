@@ -22,6 +22,14 @@ void main() {
     // Неизвестный выход (сервер провайдера с любым тегом) — это VPN.
     expect(ConnEntry.tryParse('from 127.0.0.1:1 accepted tcp:a.com:80 [http -> de-1]', routes)!.route, ConnRoute.proxy);
     expect(ConnEntry.tryParse('[Warning] core: Xray 26.9.30 started', routes), isNull);
+    // Обычный HTTP через прокси-порт записан адресом страницы: остаётся только сайт, путь отбрасывается.
+    final h = ConnEntry.tryParse(
+        '2026/10/02 00:22:43.474967 from 127.0.0.1:54061 accepted http://ctldl.windowsupdate.com/msdownload/pin.cab?7e2d [http -> proxy-2]',
+        routes)!;
+    expect((h.host, h.port, h.inbound, h.outbound, h.route), ('ctldl.windowsupdate.com', 80, 'http', 'proxy-2', ConnRoute.proxy));
+    // HTTPS через прокси-порт (CONNECT).
+    final s = ConnEntry.tryParse('from 127.0.0.1:50168 accepted //tls.example:443 [http -> direct]', routes)!;
+    expect((s.host, s.port, s.route), ('tls.example', 443, ConnRoute.direct));
   });
 
   test('соединения хранятся только в памяти: список сайтов на диск не пишется', () async {

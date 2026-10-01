@@ -98,7 +98,8 @@ void main() {
             // После правил для выбранных программ остальной трафик адаптера идёт напрямую.
             final rest = rules.indexWhere((r) => r['process'] == null && r['ip'] == null && r['port'] == null);
             expect(rules[rest]['outboundTag'], 'skipit-direct');
-            expect(rules[rest]['inboundTag'], [XrayConfig.tunTag]);
+            // Правила действуют и на адаптер, и на прокси-порты (в «Смешанном» режиме браузеры идут через них).
+            expect(rules[rest]['inboundTag'], [XrayConfig.tunTag, 'socks', 'http']);
             expect(rules.lastIndexOf(byProcess.last), rest - 1);
         }
 
@@ -113,6 +114,28 @@ void main() {
         } finally {
           await dir.delete(recursive: true);
         }
+      }
+
+      // TUN держит sing-box: в конфиг Xray попадают только правила для прокси-портов.
+      final viaSingbox = XrayConfig.build(server: link, routing: RoutingProfile.global(), settings: AppSettings());
+      XrayConfig.addProxyAppRules(viaSingbox, settings: AppSettings(), apps: apps);
+      final rules = (viaSingbox['routing'] as Map)['rules'] as List;
+      final byProcess = rules.where((r) => r['process'] != null).toList();
+      expect(byProcess.isEmpty, mode == AppRoutingMode.off);
+      expect(byProcess.every((r) => jsonEncode(r['inboundTag']) == '["socks","http"]'), isTrue);
+      if (mode == AppRoutingMode.onlySelected) {
+        // Трафик выбранных программ из адаптера приходит от имени sing-box и не должен уйти напрямую.
+        expect(byProcess.every((r) => (r['process'] as List).contains('skipit-sing-box')), isTrue);
+      }
+      rules.removeWhere((r) => jsonEncode(r).contains(RegExp('geoip:|geosite:')));
+      final dir = await Directory.systemTemp.createTemp('skipit-xray-test');
+      try {
+        final file = File('${dir.path}\\config.json');
+        await file.writeAsString(jsonEncode(viaSingbox));
+        final r = await Process.run(exe, ['run', '-test', '-c', file.path], stdoutEncoding: utf8, stderrEncoding: utf8);
+        expect(r.exitCode, 0, reason: '${r.stdout}\n${r.stderr}');
+      } finally {
+        await dir.delete(recursive: true);
       }
     }, skip: hasCore ? false : 'ядро Xray не скачано (tools\\setup.ps1)');
   }
