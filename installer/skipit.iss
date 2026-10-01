@@ -1,9 +1,9 @@
 ; Установщик SkipIt (Inno Setup 6/7).
 ; Собирается скриптом tools\build.ps1: версия передаётся через /DAppVersion=... (из тега релиза).
-;   ISCC.exe /DAppVersion=1.0.1 installer\skipit.iss
+;   ISCC.exe /DAppVersion=1.0.2 installer\skipit.iss
 
 #ifndef AppVersion
-  #define AppVersion "1.0.1"
+  #define AppVersion "1.0.2"
 #endif
 #define AppName "SkipIt"
 #define AppExe "SkipIt.exe"
@@ -15,9 +15,9 @@ AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
 AppPublisher=SkipIt
-AppPublisherURL=https://github.com/FrI3nd7/skipit
-AppSupportURL=https://github.com/FrI3nd7/skipit/issues
-AppUpdatesURL=https://github.com/FrI3nd7/skipit/releases
+AppPublisherURL=https://github.com/getskipit/skipit
+AppSupportURL=https://github.com/getskipit/skipit/issues
+AppUpdatesURL=https://github.com/getskipit/skipit/releases
 DefaultDirName={autopf}\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
@@ -52,7 +52,10 @@ Source: "{#Release}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs cr
 Source: "..\core\skipit-xray.exe"; DestDir: "{app}\core"; Flags: ignoreversion
 Source: "..\core\skipit-sing-box.exe"; DestDir: "{app}\core"; Flags: ignoreversion
 ; Лицензии: своя и вложенных ядер (MPL-2.0 и GPL-3.0 требуют прикладывать их текст и ссылки на исходники).
+Source: "..\core\LICENSE-Xray.txt"; DestDir: "{app}\core"; Flags: ignoreversion
+Source: "..\core\LICENSE-sing-box.txt"; DestDir: "{app}\core"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
+Source: "..\NOTICE"; DestDir: "{app}"; DestName: "NOTICE.txt"; Flags: ignoreversion
 Source: "..\THIRD_PARTY_NOTICES.md"; DestDir: "{app}"; DestName: "THIRD_PARTY_NOTICES.txt"; Flags: ignoreversion
 
 [InstallDelete]

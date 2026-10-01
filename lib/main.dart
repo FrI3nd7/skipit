@@ -4,9 +4,11 @@ import 'dart:io';
 import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 
 import 'core/paths.dart';
 import 'core/tray.dart';
+import 'core/windows.dart';
 import 'models/settings.dart';
 import 'state/app_scope.dart';
 import 'state/app_state.dart';
@@ -14,7 +16,8 @@ import 'ui/flag_text.dart';
 import 'ui/shell.dart';
 import 'ui/theme.dart';
 
-const _instancePort = 47813;
+// У тестовой сборки свой порт: она запускается рядом с установленной программой и не передаёт ей ссылки.
+final _instancePort = AppPaths.isDev ? 47814 : 47813;
 
 /// Второй запуск (например, по ссылке skipit://…) передаёт аргументы первому и выходит.
 Future<ServerSocket?> _acquireSingleInstance(List<String> args) async {
@@ -54,10 +57,21 @@ Future<ServerSocket?> _acquireSingleInstance(List<String> args) async {
 
 Future<void> main(List<String> args) async {
   WidgetsFlutterBinding.ensureInitialized();
-  final server = await _acquireSingleInstance(args);
+  var server = await _acquireSingleInstance(args);
   await AppPaths.init();
 
   final state = AppState();
+  await state.load();
+  // «Запускать от имени администратора»: перезапускаемся с правами ещё до показа окна.
+  // Если в окне Windows ответили «Нет», работаем дальше без прав (TUN будет недоступен).
+  if (state.needsElevation(args)) {
+    await server?.close();
+    if (await WinSys.relaunchAsAdmin(args)) {
+      await Tray.quit();
+      exit(0);
+    }
+    server = await _acquireSingleInstance([...args, '--no-elevate']);
+  }
   server?.listen((socket) async {
     try {
       final text = await utf8.decoder.bind(socket).join();
@@ -98,7 +112,7 @@ Future<void> main(List<String> args) async {
       ConnStatus.disconnecting => 'Отключение…',
       ConnStatus.disconnected => 'Не подключено',
     };
-    final tooltip = 'SkipIt — $status${server != null ? '\n$server' : ''}';
+    final tooltip = '${AppPaths.appName} — $status${server != null ? '\n$server' : ''}';
     final key = '$tooltip|${state.isConnected}|${state.settings.closeToTray}';
     if (key == lastTray) return;
     lastTray = key;
@@ -132,10 +146,30 @@ class _SkipItAppState extends State<SkipItApp> with WidgetsBindingObserver {
             : Palette.dark,
       };
 
-  /// Тема меняется в настройках или в Windows («Как в системе») — перестраиваем окно целиком.
+  /// Тема меняется в настройках или в Windows («Как в системе»). Цвета читаются при построении
+  /// виджетов, поэтому перестраиваем все виджеты окна — но не пересоздаём их: состояние (открытый
+  /// раздел, прокрутка, анимация переключателей) сохраняется, и смена темы выглядит плавно.
   void _syncTheme() {
     final p = _resolvePalette();
-    if (!identical(p, _palette)) setState(() => _palette = p);
+    if (identical(p, _palette)) return;
+    void apply() {
+      if (!mounted) return;
+      setState(() => _palette = p);
+      C.use(p);
+      void rebuild(Element e) {
+        e.markNeedsBuild();
+        e.visitChildren(rebuild);
+      }
+
+      (context as Element).visitChildren(rebuild);
+    }
+
+    // Во время построения кадра помечать виджеты нельзя — откладываем до его конца.
+    if (SchedulerBinding.instance.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => apply());
+    } else {
+      apply();
+    }
   }
 
   @override
@@ -164,12 +198,10 @@ class _SkipItAppState extends State<SkipItApp> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     C.use(_palette);
-    // Цвета читаются при построении виджетов, поэтому при смене темы окно пересоздаётся (ключ).
     return AppScope(
-      key: ValueKey(_palette.brightness),
       state: widget.state,
       child: MaterialApp(
-        title: 'SkipIt',
+        title: AppPaths.appName,
         debugShowCheckedModeBanner: false,
         theme: buildTheme(),
         home: const Shell(),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import 'app_menu.dart';
 import 'theme.dart';
 
 /// Отслеживает наведение мыши и перестраивает содержимое.
@@ -27,11 +28,12 @@ class _HoverState extends State<Hover> {
 
 /// Знак приложения: два скруглённых треугольника «перемотки».
 class AppMark extends StatelessWidget {
-  const AppMark({super.key, this.size = 32, this.opacities = const (1.0, 1.0), this.muted = false, this.white = false});
+  const AppMark({super.key, this.size = 32, this.flight, this.muted = false, this.white = false});
   final double size;
 
-  /// Прозрачность левого и правого треугольника — для анимации при подключении.
-  final (double, double) opacities;
+  /// Анимация подключения: стрелки «летят» в ту сторону, куда указывают. Значение 0…1 — доля пути,
+  /// на которую они сдвинулись на одно место (на 0 и на 1 знак выглядит как обычный). null — стоит на месте.
+  final double? flight;
   final bool muted;
   final bool white;
 
@@ -39,15 +41,18 @@ class AppMark extends StatelessWidget {
   Widget build(BuildContext context) => SizedBox(
         width: size,
         height: size * 0.72,
-        child: CustomPaint(painter: _MarkPainter(opacities, muted, white)),
+        child: CustomPaint(painter: _MarkPainter(flight, muted, white)),
       );
 }
 
 class _MarkPainter extends CustomPainter {
-  _MarkPainter(this.opacities, this.muted, this.white);
-  final (double, double) opacities;
+  _MarkPainter(this.flight, this.muted, this.white);
+  final double? flight;
   final bool muted;
   final bool white;
+
+  /// Тема, в которой знак нарисован: после её смены его нужно перерисовать.
+  final Palette palette = C.palette;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -78,18 +83,29 @@ class _MarkPainter extends CustomPainter {
     }
 
     // Два одинаковых треугольника с небольшим зазором, без выемки (на крупной кнопке она выглядела как кружок).
-    canvas.saveLayer(Offset.zero & size, Paint()..color = Colors.white.withValues(alpha: opacities.$1));
-    drawTri(tri(0, w * 0.48));
-    canvas.restore();
-
-    canvas.saveLayer(Offset.zero & size, Paint()..color = Colors.white.withValues(alpha: opacities.$2));
-    drawTri(tri(w * 0.52, w * 0.48));
-    canvas.restore();
+    const step = 0.52, width = 0.48;
+    final t = flight;
+    if (t == null) {
+      drawTri(tri(0, w * width));
+      drawTri(tri(w * step, w * width));
+      return;
+    }
+    // В полёте треугольников три: слева влетает новый, два сдвигаются вправо, правый улетает.
+    // У краёв знака они плавно проявляются и тают, поэтому цикл замыкается без рывка.
+    for (var i = -1; i <= 1; i++) {
+      final x0 = (i + t) * step;
+      final center = x0 + width / 2;
+      final alpha = ((center + 0.1) / 0.3).clamp(0.0, 1.0) * ((1.1 - center) / 0.3).clamp(0.0, 1.0);
+      if (alpha <= 0) continue;
+      canvas.saveLayer(Rect.fromLTRB(-w, 0, w * 2, h), Paint()..color = Colors.white.withValues(alpha: alpha));
+      drawTri(tri(w * x0, w * width));
+      canvas.restore();
+    }
   }
 
   @override
   bool shouldRepaint(covariant _MarkPainter old) =>
-      old.opacities != opacities || old.muted != muted || old.white != white;
+      old.flight != flight || old.muted != muted || old.white != white || !identical(old.palette, palette);
 }
 
 /// Значок приложения — та же картинка, что у иконки exe (assets/icon.png из tools/make_icon.ps1).
@@ -122,41 +138,93 @@ class AppDropdown<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Hover(
-        builder: (context, hovered) => AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          height: height,
-          padding: const EdgeInsets.only(left: 14, right: 8),
-          decoration: BoxDecoration(
-            color: hovered ? C.orange.withValues(alpha: 0.08) : (height != null ? C.surface : Colors.transparent),
-            borderRadius: BorderRadius.circular(height != null ? 18 : 12),
-            border: Border.all(color: hovered ? C.orange.withValues(alpha: 0.7) : C.border),
-          ),
-          child: Row(mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min, children: [
-            if (leading != null) ...[leading!, const SizedBox(width: 12)],
-            Flexible(
-              fit: expand ? FlexFit.tight : FlexFit.loose,
-              child: DropdownButtonHideUnderline(
-            child: DropdownButton<T>(
-              value: value,
-              isExpanded: expand,
-              focusColor: Colors.transparent,
-              dropdownColor: C.surface2,
-              borderRadius: BorderRadius.circular(12),
-              icon: Icon(Icons.expand_more_rounded, color: C.muted),
-              style: TextStyle(color: C.text, fontSize: 14, fontWeight: FontWeight.w600, fontFamily: 'Segoe UI'),
-              items: [for (final e in items.entries) DropdownMenuItem(value: e.key, child: Text(e.value))],
-              onChanged: (v) {
-                if (v != null) onChanged(v);
-                // Снимаем фокус, иначе Flutter оставляет подсветку после выбора.
-                FocusManager.instance.primaryFocus?.unfocus();
-              },
+        builder: (context, hovered) => GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          // Список открывается тем же меню, что и остальные меню приложения; текущий пункт отмечен галочкой.
+          onTap: () async {
+            final v = await showAppMenu<T>(context, matchWidth: true, items: [
+              for (final e in items.entries) AppMenuItem(e.key, e.value, checked: e.key == value),
+            ]);
+            if (v != null && v != value) onChanged(v);
+          },
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            height: height ?? 42,
+            padding: const EdgeInsets.only(left: 14, right: 8),
+            decoration: BoxDecoration(
+              color: hovered ? C.orange.withValues(alpha: 0.08) : (height != null ? C.surface : Colors.transparent),
+              borderRadius: BorderRadius.circular(height != null ? 18 : 12),
+              border: Border.all(color: hovered ? C.orange.withValues(alpha: 0.7) : C.border),
             ),
+            child: Row(mainAxisSize: expand ? MainAxisSize.max : MainAxisSize.min, children: [
+              if (leading != null) ...[leading!, const SizedBox(width: 12)],
+              Flexible(
+                fit: expand ? FlexFit.tight : FlexFit.loose,
+                child: Text(items[value] ?? '$value',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(color: C.text, fontSize: 14, fontWeight: FontWeight.w600)),
+              ),
+              const SizedBox(width: 8),
+              Icon(Icons.expand_more_rounded, color: hovered ? C.orange : C.muted),
+            ]),
           ),
-            ),
-          ]),
         ),
       );
 }
+/// Плавное раскрытие и сворачивание блока: высота меняется, а содержимое проявляется и тает.
+/// При сворачивании содержимое остаётся на месте до конца анимации, а не исчезает сразу.
+class Reveal extends StatefulWidget {
+  const Reveal({super.key, required this.open, required this.child});
+  final bool open;
+  final Widget child;
+
+  @override
+  State<Reveal> createState() => _RevealState();
+}
+
+class _RevealState extends State<Reveal> with SingleTickerProviderStateMixin {
+  late final _anim = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 280),
+    reverseDuration: const Duration(milliseconds: 220),
+    value: widget.open ? 1 : 0,
+  );
+  late final _size = CurvedAnimation(parent: _anim, curve: Curves.easeOutCubic, reverseCurve: Curves.easeInCubic);
+  // Содержимое проявляется сразу и быстрее, чем раздвигается место под него: с отложенным
+  // проявлением сначала раскрывалась пустота, и это выглядело как задержка.
+  late final _fade = CurvedAnimation(parent: _anim, curve: const Interval(0, 0.55, curve: Curves.easeOut));
+
+  @override
+  void didUpdateWidget(Reveal old) {
+    super.didUpdateWidget(old);
+    if (old.open != widget.open) widget.open ? _anim.forward() : _anim.reverse();
+  }
+
+  @override
+  void dispose() {
+    _size.dispose();
+    _fade.dispose();
+    _anim.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+        animation: _anim,
+        builder: (context, child) => _anim.isDismissed
+            ? const SizedBox(width: double.infinity)
+            : ClipRect(
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  heightFactor: _size.value,
+                  child: Opacity(opacity: _fade.value, child: child),
+                ),
+              ),
+        child: widget.child,
+      );
+}
+
 /// Панель с тонкой рамкой. Если задан onTap — подсвечивается при наведении.
 class Panel extends StatelessWidget {
   const Panel({super.key, required this.child, this.padding = const EdgeInsets.all(18), this.glow = false, this.onTap});
@@ -303,8 +371,29 @@ class ConnectButton extends StatefulWidget {
 }
 
 class _ConnectButtonState extends State<ConnectButton> with SingleTickerProviderStateMixin {
-  late final _anim = AnimationController(vsync: this, duration: const Duration(milliseconds: 900))..repeat();
+  late final _anim = AnimationController(vsync: this, duration: const Duration(milliseconds: 750));
   bool _hover = false;
+
+  /// Анимация крутится только пока идёт подключение — в покое окно не перерисовывается впустую.
+  void _syncAnim() {
+    if (widget.busy && !_anim.isAnimating) {
+      _anim.repeat();
+    } else if (!widget.busy && _anim.isAnimating) {
+      _anim.stop();
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _syncAnim();
+  }
+
+  @override
+  void didUpdateWidget(ConnectButton old) {
+    super.didUpdateWidget(old);
+    _syncAnim();
+  }
 
   @override
   void dispose() {
@@ -351,14 +440,12 @@ class _ConnectButtonState extends State<ConnectButton> with SingleTickerProvider
                   padding: const EdgeInsets.only(left: 10),
                   child: AnimatedBuilder(
                     animation: _anim,
-                    builder: (_, __) {
-                      var ops = (1.0, 1.0);
-                      if (widget.busy) {
-                        final t = _anim.value;
-                        ops = (t < 0.5 ? 1.0 : 0.25, t < 0.5 ? 0.25 : 1.0);
-                      }
-                      return AppMark(size: 104, opacities: ops, muted: !lit);
-                    },
+                    builder: (_, __) => AppMark(
+                      size: 104,
+                      // Разгон и торможение в каждом цикле — стрелки «перелетают» на место друг друга.
+                      flight: widget.busy ? Curves.easeInOutCubic.transform(_anim.value) : null,
+                      muted: !lit,
+                    ),
                   ),
                 ),
               ),
@@ -427,56 +514,107 @@ class Tag extends StatelessWidget {
       );
 }
 
-/// Сегментированный переключатель; невыбранные пункты подсвечиваются при наведении.
-class Segmented<T> extends StatelessWidget {
+/// Сегментированный переключатель: оранжевая «плашка» плавно переезжает к выбранному пункту;
+/// невыбранные пункты подсвечиваются при наведении.
+class Segmented<T> extends StatefulWidget {
   const Segmented({super.key, required this.value, required this.items, required this.onChanged});
   final T value;
   final Map<T, String> items;
   final ValueChanged<T> onChanged;
 
   @override
-  Widget build(BuildContext context) => FittedBox(
-        // В узком месте переключатель ужимается целиком, а не вылезает за край.
-        fit: BoxFit.scaleDown,
-        child: Container(
+  State<Segmented<T>> createState() => _SegmentedState<T>();
+}
+
+class _SegmentedState<T> extends State<Segmented<T>> {
+  final _stackKey = GlobalKey();
+  final _keys = <T, GlobalKey>{};
+
+  /// Место выбранного пункта внутри переключателя. null — ещё не измерено (первый кадр).
+  Rect? _thumb;
+
+  /// Первое появление плашки — без анимации, дальше она ездит.
+  bool _animate = false;
+
+  /// Ширина пунктов зависит от текста, поэтому место плашки берётся из реальной раскладки после кадра.
+  void _measure() {
+    final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
+    final item = _keys[widget.value]?.currentContext?.findRenderObject() as RenderBox?;
+    if (stack == null || item == null || !stack.hasSize || !item.hasSize) return;
+    final rect = item.localToGlobal(Offset.zero, ancestor: stack) & item.size;
+    if (rect == _thumb) return;
+    setState(() {
+      _animate = _thumb != null;
+      _thumb = rect;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _measure();
+    });
+    final thumb = _thumb;
+    return FittedBox(
+      // В узком месте переключатель ужимается целиком, а не вылезает за край.
+      fit: BoxFit.scaleDown,
+      child: Container(
         padding: const EdgeInsets.all(4),
         decoration: BoxDecoration(
           color: C.surface2,
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: C.border),
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            for (final e in items.entries)
-              Hover(
-                builder: (context, hovered) {
-                  final selected = e.key == value;
-                  return GestureDetector(
-                    onTap: () => onChanged(e.key),
-                    // Выбор переключается мгновенно: фон и цвет текста меняются в один кадр.
-                    // Плавный переход на светлом фоне давал «грязные» промежуточные цвета.
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
-                      decoration: BoxDecoration(
-                        gradient: selected ? C.gradient : null,
-                        color: !selected && hovered ? C.hover : null,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(e.value,
+        child: Stack(key: _stackKey, children: [
+          if (thumb != null)
+            AnimatedPositioned.fromRect(
+              rect: thumb,
+              duration: Duration(milliseconds: _animate ? 240 : 0),
+              curve: Curves.easeOutCubic,
+              child: DecoratedBox(
+                decoration: BoxDecoration(gradient: C.gradient, borderRadius: BorderRadius.circular(10)),
+              ),
+            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final e in widget.items.entries)
+                Hover(
+                  builder: (context, hovered) {
+                    final selected = e.key == widget.value;
+                    return GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => widget.onChanged(e.key),
+                      child: Container(
+                        key: _keys.putIfAbsent(e.key, GlobalKey.new),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+                        decoration: BoxDecoration(
+                          // До первого измерения выбранный пункт закрашен сам — без пустого кадра.
+                          gradient: selected && thumb == null ? C.gradient : null,
+                          color: !selected && hovered ? C.hover : null,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        // Плавно меняется только цвет текста; фон не смешивается — едет сама плашка.
+                        child: AnimatedDefaultTextStyle(
+                          duration: const Duration(milliseconds: 180),
                           style: TextStyle(
+                            fontFamily: 'Segoe UI',
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
                             color: selected ? Colors.white : (hovered ? C.text : C.muted),
-                          )),
-                    ),
-                  );
-                },
-              ),
-          ],
-        ),
+                          ),
+                          child: Text(e.value),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+            ],
+          ),
+        ]),
       ),
-      );
+    );
+  }
 }
 
 Future<String?> promptText(

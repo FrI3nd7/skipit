@@ -1,7 +1,7 @@
 ﻿# Сборка SkipIt: программа + установщик SkipIt-Setup-Windows-<версия>.exe.
 #   powershell -ExecutionPolicy Bypass -File tools\build.ps1 [-Version 1.0.2b]
 # Без -Version берётся версия по умолчанию из lib\version.dart.
-# Результат: build\installer\SkipIt-Setup-Windows-<версия>.exe
+# Результат: build\installer\SkipIt-Setup-Windows-<версия>.exe и файл .sha256 с его контрольной суммой
 
 param([string]$Version)
 
@@ -19,9 +19,8 @@ try {
     if (-not $numeric) { throw "Не удалось разобрать версию '$Version'" }
     Write-Host "Версия: $Version (числовая $numeric)" -ForegroundColor Cyan
 
-    if (-not (Test-Path 'core\skipit-xray.exe') -or -not (Test-Path 'core\skipit-sing-box.exe')) {
-        & (Join-Path $PSScriptRoot 'setup.ps1')
-    }
+    # Ядра нужных версий (tools\cores.json); если они уже скачаны, скрипт ничего не качает.
+    & (Join-Path $PSScriptRoot 'setup.ps1')
 
     flutter build windows --release --no-tree-shake-icons --build-name $numeric --dart-define "APP_VERSION=$Version"
     if ($LASTEXITCODE -ne 0) { throw 'flutter build завершился с ошибкой' }
@@ -38,7 +37,11 @@ try {
 
     & $iscc "/DAppVersion=$Version" 'installer\skipit.iss'
     if ($LASTEXITCODE -ne 0) { throw 'Сборка установщика завершилась с ошибкой' }
-    Write-Host "Готово: build\installer\SkipIt-Setup-Windows-$Version.exe" -ForegroundColor Green
+    # Контрольная сумма рядом с установщиком: по ней программа проверяет скачанное обновление.
+    $installer = "build\installer\SkipIt-Setup-Windows-$Version.exe"
+    $hash = (Get-FileHash $installer -Algorithm SHA256).Hash.ToLower()
+    [IO.File]::WriteAllText((Join-Path $root "$installer.sha256"), "$hash  SkipIt-Setup-Windows-$Version.exe`n")
+    Write-Host "Готово: $installer" -ForegroundColor Green
 } finally {
     Pop-Location
 }

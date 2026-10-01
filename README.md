@@ -12,10 +12,10 @@
 
 <br>
 
-[![version](https://img.shields.io/github/v/release/FrI3nd7/skipit?include_prereleases&sort=date&style=for-the-badge&label=version&labelColor=010409&color=FF6A1A&logo=github&logoColor=white)](https://github.com/FrI3nd7/skipit/releases/latest)
+[![version](https://img.shields.io/github/v/release/getskipit/skipit?include_prereleases&sort=date&style=for-the-badge&label=version&labelColor=010409&color=FF6A1A&logo=github&logoColor=white)](https://github.com/getskipit/skipit/releases/latest)
 [![status](https://img.shields.io/badge/stable-3FB950?style=for-the-badge&label=status&labelColor=010409&logo=rocket&logoColor=white)](#-о-проекте)
-[![downloads](https://img.shields.io/github/downloads/FrI3nd7/skipit/total?style=for-the-badge&label=downloads&labelColor=010409&color=3FB950&logo=windows&logoColor=white)](https://github.com/FrI3nd7/skipit/releases)
-[![license](https://img.shields.io/github/license/FrI3nd7/skipit?style=for-the-badge&label=license&labelColor=010409&color=3FB950&logo=opensourceinitiative&logoColor=white)](LICENSE)
+[![downloads](https://img.shields.io/github/downloads/getskipit/skipit/total?style=for-the-badge&label=downloads&labelColor=010409&color=3FB950&logo=windows&logoColor=white)](https://github.com/getskipit/skipit/releases)
+[![license](https://img.shields.io/github/license/getskipit/skipit?style=for-the-badge&label=license&labelColor=010409&color=3FB950&logo=opensourceinitiative&logoColor=white)](LICENSE)
 
 [![os](https://img.shields.io/badge/Windows%2010%20%C2%B7%2011%20x64-161B22?style=for-the-badge&label=os&labelColor=010409&logo=windows11&logoColor=0078D4)](#-системные-требования)
 [![engine](https://img.shields.io/badge/Xray--core%20%2B%20sing--box-161B22?style=for-the-badge&label=engine&labelColor=010409&logo=v&logoColor=FF6A1A)](#-протоколы)
@@ -42,19 +42,19 @@
 Забудьте про настройку:
 * 📋 **Ctrl+V — и готово** — ссылка на подписку или сервер вставляется в любом месте окна.
 * 🧠 **Правила провайдера применяются сами** — российские сайты, банки и сервисы идут напрямую, остальное — через VPN. Ничего не нужно настраивать руками.
-* 🌍 **Серверы с флагами и задержкой** — видно, где сервер и насколько он быстрый; самый быстрый выбирается одной кнопкой.
+* 🌍 **Серверы с флагами и задержкой** — видно, где сервер и насколько он быстрый.
 * 🎮 **Игры и программы — на ваш выбор** — можно пустить через VPN только нужные программы или, наоборот, исключить их.
 * 🔔 **Живёт в трее** — закрыли окно, а VPN продолжает работать; подключиться и отключиться можно прямо из трея.
 * 🔄 **Обновляется сам** — новая версия ставится одной кнопкой, без поиска установщика.
 
 > [!NOTE]
-> **Есть идеи или нашли баг?** Смело создавайте [Issue](https://github.com/FrI3nd7/skipit/issues) — любая помощь приветствуется!
+> **Есть идеи или нашли баг?** Смело создавайте [Issue](https://github.com/getskipit/skipit/issues) — любая помощь приветствуется!
 
 ---
 
 ## 📥 Установка
 
-1. Откройте [последний релиз](https://github.com/FrI3nd7/skipit/releases/latest).
+1. Откройте [последний релиз](https://github.com/getskipit/skipit/releases/latest).
 2. Скачайте **`SkipIt-Setup-Windows-<версия>.exe`** и запустите его.
 3. Скопируйте ссылку на подписку от вашего VPN-провайдера и нажмите **Ctrl+V** в окне SkipIt.
 4. Нажмите на большую кнопку ▶▶ — готово.
@@ -155,6 +155,6 @@ SkipIt свёрнут в трей — нажмите на его значок р
 
 🛠 Разработчикам: сборка из исходников и выпуск версий — в [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)
 
-📄 Лицензия [MIT](LICENSE) · сторонние компоненты — в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
+📄 Лицензия [Apache-2.0](LICENSE) · название и логотип SkipIt лицензией не передаются ([NOTICE](NOTICE)) · сторонние компоненты — в [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
 </div>

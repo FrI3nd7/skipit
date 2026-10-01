@@ -12,13 +12,34 @@ Visual Studio 2022 с нагрузкой «Разработка классиче
 [Inno Setup](https://jrsoftware.org/isdl.php).
 
 ```
-powershell -ExecutionPolicy Bypass -File tools\setup.ps1                     # скачать ядра Xray и sing-box в core\
-powershell -ExecutionPolicy Bypass -File tools\build.ps1 -Version 1.0.1a     # программа + установщик
+powershell -ExecutionPolicy Bypass -File tools\build.ps1 -Version 1.0.2a     # программа + установщик
+powershell -ExecutionPolicy Bypass -File tools\dev.ps1                       # тестовая копия «SkipIt Dev»
 ```
 
-Результат — `build\installer\SkipIt-Setup-Windows-1.0.1a.exe`.
-Запуск для разработки: `flutter run -d windows`. Тесты: `flutter test`.
-Иконка пересобирается скриптом `tools\make_icon.ps1`.
+Результат сборки — `build\installer\SkipIt-Setup-Windows-1.0.2a.exe` и файл `.sha256` с его контрольной суммой.
+Тесты: `flutter test`. Иконка пересобирается скриптом `tools\make_icon.ps1`.
+
+### Тестовая копия
+
+`tools\dev.ps1` собирает программу в `build\dev` и запускает её как **SkipIt Dev**. У неё всё своё:
+папка данных `%APPDATA%\SkipIt Dev`, автозапуск, положение окна, имя TUN-адаптера. Поэтому её можно
+запускать рядом со SkipIt, установленным из релиза, — они не мешают друг другу. При первом запуске
+подписки и настройки один раз копируются из установленной программы. Из релизов тестовая копия не обновляется.
+
+### Версии ядер
+
+Ядра вложены в установщик, программа у пользователей их сама не обновляет. Версии задаются в
+`tools\cores.json`:
+
+```json
+{ "xray": { "version": "v26.9.30", "sha256": "…" }, "sing-box": { "version": "v1.14.2", "sha256": "…" } }
+```
+
+`version` — тег релиза ядра на GitHub, `sha256` — контрольная сумма zip-архива для Windows x64 со страницы
+релиза (пустая строка — не проверять). Чтобы обновить ядро: поменяйте оба значения, запустите
+`flutter test` (тест `xray_core_test.dart` проверит на новом ядре конфиги для всех видов ссылок) и
+выпустите новую версию SkipIt. У Xray свежие версии выходят с пометкой pre-release — это обычная
+практика авторов, брать нужно их.
 
 ## Выпуск версии
 
@@ -32,8 +53,12 @@ powershell -ExecutionPolicy Bypass -File tools\build.ps1 -Version 1.0.1a     # �
    - канал **«Бета»** — всегда самую свежую версию, включая пре-релизы;
    - канал **«Стабильный»** (по умолчанию) — только обычные релизы. Пока ни одного обычного
      релиза нет, он тоже получает пре-релизы — иначе пользователи в альфе остались бы без обновлений.
-3. **Publish release.** Через несколько минут к релизу прикрепится `SkipIt-Setup-Windows-<версия>.exe`,
+3. **Publish release.** Через несколько минут к релизу прикрепятся `SkipIt-Setup-Windows-<версия>.exe`,
+   файл `.sha256` с его контрольной суммой и архив с исходниками вложенного sing-box (этого требует GPL),
    а установленные SkipIt предложат обновиться. Версия в программе берётся из тега.
+
+Программа узнаёт о новой версии по обычным адресам GitHub (`/releases/latest`, `/releases.atom`,
+`/releases/download/...`), а не через API: у API лимит 60 запросов в час на IP-адрес.
 
 ## Где программа хранит данные
 

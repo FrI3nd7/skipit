@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import '../models/routing.dart';
 import '../models/server.dart';
@@ -273,6 +274,10 @@ class LinkParser {
     String extra = '',
     String seed = '',
     String authority = '',
+    String ech = '',
+    String pcs = '',
+    String vcn = '',
+    String fm = '',
     List<String>? warnings,
   }) {
     var net = network.toLowerCase();
@@ -332,6 +337,15 @@ class LinkParser {
         warnings?.add('Неизвестный транспорт: $net');
     }
 
+    // Finalmask — маскировка трафика поверх транспорта (параметр fm, JSON).
+    if (fm.isNotEmpty) {
+      try {
+        stream['finalmask'] = jsonDecode(fm) as Map<String, dynamic>;
+      } catch (_) {
+        warnings?.add('Не удалось разобрать параметр fm');
+      }
+    }
+
     final alpnList = alpn.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
     switch (security.toLowerCase()) {
       case 'tls':
@@ -340,7 +354,8 @@ class LinkParser {
           if (sni.isNotEmpty) 'serverName': sni,
           'fingerprint': fp.isEmpty ? 'chrome' : fp,
           if (alpnList.isNotEmpty) 'alpn': alpnList,
-          if (insecure) 'allowInsecure': true,
+          if (ech.isNotEmpty) 'echConfigList': ech,
+          ...tlsTrust(insecure: insecure, pcs: pcs, vcn: vcn, warnings: warnings),
         };
       case 'reality':
         stream['security'] = 'reality';
@@ -356,6 +371,19 @@ class LinkParser {
         stream['security'] = 'none';
     }
     return stream;
+  }
+
+  /// Проверка сертификата сервера. Xray 26 убрал `allowInsecure` (с ним ядро не запускается):
+  /// вместо отключения проверки сертификат закрепляют по отпечатку (pcs) или имени (vcn).
+  static Map<String, dynamic> tlsTrust({required bool insecure, String pcs = '', String vcn = '', List<String>? warnings}) {
+    if (insecure && pcs.isEmpty && vcn.isEmpty) {
+      warnings?.add('Ссылка просит не проверять сертификат (allowInsecure) — Xray это больше не поддерживает. '
+          'Если у сервера самоподписанный сертификат, подключиться не получится: попросите у провайдера новую ссылку');
+    }
+    return {
+      if (pcs.isNotEmpty) 'pinnedPeerCertSha256': pcs,
+      if (vcn.isNotEmpty) 'verifyPeerCertByName': vcn,
+    };
   }
 
   static Map<String, dynamic> _streamFromQuery(_Link l, String defaultSecurity, List<String> warnings) => _stream(
@@ -377,6 +405,10 @@ class LinkParser {
         extra: l.q('extra'),
         seed: l.q('seed'),
         authority: l.q('authority'),
+        ech: l.q('ech'),
+        pcs: l.q('pcs'),
+        vcn: l.q('vcn'),
+        fm: l.q('fm'),
         warnings: warnings,
       );
 
@@ -384,6 +416,10 @@ class LinkParser {
     final l = _split(link);
     final warnings = <String>[];
     final flow = l.q('flow');
+    final stream = _streamFromQuery(l, 'none', warnings);
+    if (stream['security'] == 'none' && l.q('encryption', 'none') == 'none' && !_isPrivateHost(l.host)) {
+      warnings.add('VLESS без шифрования (TLS/REALITY) — Xray запрещает такие подключения к серверам в интернете');
+    }
     return ServerProfile(
       name: _nameOr(l),
       protocol: 'vless',
@@ -404,9 +440,19 @@ class LinkParser {
             },
           ],
         },
-        'streamSettings': _streamFromQuery(l, 'none', warnings),
+        'streamSettings': stream,
       },
     );
+  }
+
+  /// Адрес в локальной сети (для него Xray разрешает VLESS без шифрования).
+  static bool _isPrivateHost(String host) {
+    final ip = InternetAddress.tryParse(host);
+    if (ip == null) return host == 'localhost' || !host.contains('.');
+    if (ip.isLoopback || ip.isLinkLocal) return true;
+    final b = ip.rawAddress;
+    if (b.length != 4) return b[0] & 0xfe == 0xfc;
+    return b[0] == 10 || (b[0] == 172 && b[1] >= 16 && b[1] < 32) || (b[0] == 192 && b[1] == 168);
   }
 
   static ServerProfile _vmess(String link) {
@@ -590,6 +636,8 @@ class LinkParser {
     final warnings = <String>[];
     if (l.q('obfs').isNotEmpty) warnings.add('Обфускация ${l.q('obfs')} может не поддерживаться ядром');
     final sni = l.q('sni', l.q('peer'));
+    // В ссылках Hysteria отпечаток пишут как pinSHA256, часто с двоеточиями.
+    final pin = l.q('pcs', l.q('pinSHA256')).replaceAll(':', '');
     return ServerProfile(
       name: _nameOr(l),
       protocol: 'hysteria',
@@ -607,7 +655,7 @@ class LinkParser {
           'tlsSettings': {
             'serverName': sni.isNotEmpty ? sni : l.host,
             'alpn': ['h3'],
-            if (parseBool(l.q('insecure'))) 'allowInsecure': true,
+            ...tlsTrust(insecure: parseBool(l.q('insecure')), pcs: pin, vcn: l.q('vcn'), warnings: warnings),
           },
         },
       },

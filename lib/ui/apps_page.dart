@@ -23,24 +23,23 @@ class AppsPage extends StatefulWidget {
 }
 
 class _AppsPageState extends State<AppsPage> {
-  bool _dirty = false;
+  String _iconsFor = '';
 
+  /// Иконки подгружаются при каждом изменении списка, а не один раз при открытии окна: в этот момент
+  /// сохранённый список ещё не прочитан с диска, и на новом компьютере иконок не было бы вовсе.
   @override
-  void initState() {
-    super.initState();
-    _loadIcons();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final paths = AppScope.of(context).appRules.entries.where((e) => e.isPath && !e.isFolder).map((e) => e.match).toList();
+    final key = paths.join('|');
+    if (key == _iconsFor) return;
+    _iconsFor = key;
+    IconCache.ensure(paths).then((_) {
+      if (mounted) setState(() {});
+    });
   }
 
-  Future<void> _loadIcons() async {
-    await IconCache.ensure(
-        AppScope.read(context).appRules.entries.where((e) => e.isPath && !e.isFolder).map((e) => e.match));
-    if (mounted) setState(() {});
-  }
-
-  void _touch(AppState state) {
-    state.changed();
-    setState(() => _dirty = state.isConnected && state.usesTun);
-  }
+  void _touch(AppState state) => state.changed();
 
   /// Добавляет программы в список; уже добавленные пропускает. Возвращает, сколько добавлено.
   int _addEntries(AppState state, List<({String match, String label})> items) {
@@ -54,7 +53,6 @@ class _AppsPageState extends State<AppsPage> {
       state.toast('Уже в списке');
     } else {
       _touch(state);
-      _loadIcons();
     }
     return added;
   }
@@ -159,7 +157,7 @@ class _AppsPageState extends State<AppsPage> {
             Text(hint, textAlign: TextAlign.center, style: TextStyle(color: C.muted, fontSize: 12.5)),
             const SizedBox(height: 16),
             // Заметная плашка: правила меняются только после переподключения, это легко пропустить.
-            if (_dirty)
+            if (state.appRulesPending)
               Container(
                 margin: const EdgeInsets.only(bottom: 14),
                 padding: const EdgeInsets.fromLTRB(16, 12, 12, 12),
@@ -184,10 +182,7 @@ class _AppsPageState extends State<AppsPage> {
                   GradientButton(
                     label: 'Применить',
                     icon: Icons.refresh_rounded,
-                    onPressed: () async {
-                      setState(() => _dirty = false);
-                      await state.reconnect();
-                    },
+                    onPressed: state.isBusy ? null : state.reconnect,
                   ),
                 ]),
               ),

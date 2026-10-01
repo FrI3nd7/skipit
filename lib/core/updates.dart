@@ -3,66 +3,44 @@ import 'dart:io';
 
 import 'paths.dart';
 
+/// Релиз SkipIt на GitHub. Все адреса строятся из тега — обращаться к API GitHub не нужно.
 class Release {
-  Release(this.tag, this.pageUrl, this.assets, {this.prerelease = false, this.digests = const {}});
+  Release(this.tag, this.repo);
   final String tag;
-  final String pageUrl;
-  final Map<String, String> assets; // имя файла → ссылка на скачивание
-  final bool prerelease;
-
-  /// ссылка на скачивание → SHA-256 файла (GitHub считает её сам при загрузке в релиз).
-  final Map<String, String> digests;
-
-  static Release fromJson(Map<String, dynamic> j, String repo) {
-    final assets = <String, String>{};
-    final digests = <String, String>{};
-    for (final a in (j['assets'] as List? ?? const [])) {
-      if (a is! Map) continue;
-      final url = '${a['browser_download_url']}';
-      assets['${a['name']}'] = url;
-      final d = '${a['digest'] ?? ''}';
-      if (d.startsWith('sha256:')) digests[url] = d.substring(7).toLowerCase();
-    }
-    return Release(
-      j['tag_name'] as String? ?? '',
-      j['html_url'] as String? ?? 'https://github.com/$repo/releases',
-      assets,
-      prerelease: j['prerelease'] == true,
-      digests: digests,
-    );
-  }
+  final String repo;
 
   String get version => tag.startsWith('v') ? tag.substring(1) : tag;
+  String get pageUrl => 'https://github.com/$repo/releases/tag/$tag';
 
-  String? assetMatching(RegExp pattern) {
-    for (final e in assets.entries) {
-      if (pattern.hasMatch(e.key)) return e.value;
-    }
-    return null;
-  }
+  /// Установщик, который сборка на GitHub прикрепляет к релизу.
+  String get installerName => 'SkipIt-Setup-Windows-$version.exe';
+  String get installerUrl => 'https://github.com/$repo/releases/download/$tag/$installerName';
+
+  /// Файл с SHA-256 установщика (сборка кладёт его рядом).
+  String get checksumUrl => '$installerUrl.sha256';
 }
 
-/// Ядро, которое умеем обновлять: откуда брать релиз и какой архив нужен для Windows x64.
+/// Вложенное ядро: показываем его версию в настройках. Обновляются ядра только вместе с программой.
 class CoreSpec {
-  const CoreSpec(this.name, this.exe, this.archiveExe, this.repo, this.assetPattern, this.versionPattern);
+  const CoreSpec(this.name, this.exe, this.versionPattern);
   final String name;
 
   /// Имя у нас (уникальное, чтобы другие VPN-клиенты не закрывали чужие xray.exe).
   final String exe;
-
-  /// Имя файла внутри архива релиза.
-  final String archiveExe;
-  final String repo;
-  final String assetPattern;
   final String versionPattern;
 
   String get path => '${AppPaths.coreDir.path}\\$exe';
 
-  static const xray = CoreSpec('Xray-core', 'skipit-xray.exe', 'xray.exe', 'XTLS/Xray-core',
-      r'^Xray-windows-64\.zip$', r'Xray ([\d.]+)');
-  static const singbox = CoreSpec('sing-box', 'skipit-sing-box.exe', 'sing-box.exe', 'SagerNet/sing-box',
-      r'^sing-box-[\d.]+-windows-amd64\.zip$', r'sing-box version ([\d.]+)');
+  static const xray = CoreSpec('Xray-core', 'skipit-xray.exe', r'Xray ([\d.]+)');
+  static const singbox = CoreSpec('sing-box', 'skipit-sing-box.exe', r'sing-box version ([\d.]+)');
   static const all = [xray, singbox];
+}
+
+/// GitHub временно ограничил запросы с этого адреса — не ошибка программы, нужно просто подождать.
+class UpdateLimitedException implements Exception {
+  const UpdateLimitedException();
+  @override
+  String toString() => 'GitHub временно ограничил проверки с вашего адреса — попробуйте позже';
 }
 
 class Updates {
@@ -72,44 +50,78 @@ class Updates {
     return c;
   }
 
-  static Future<Object?> _getJson(String url, int? proxyPort) async {
+  /// Запрос к обычной странице github.com (не к API: у API лимит 60 запросов в час на IP-адрес,
+  /// а адрес VPN-сервера общий для многих пользователей).
+  static Future<({int status, String? location, String body})> _get(
+    String url,
+    int? proxyPort, {
+    String method = 'GET',
+    bool followRedirects = true,
+  }) async {
     final client = _client(proxyPort);
     try {
-      final req = await client.getUrl(Uri.parse(url));
+      final req = await client.openUrl(method, Uri.parse(url));
+      req.followRedirects = followRedirects;
       req.headers.set(HttpHeaders.userAgentHeader, 'SkipIt-updater');
-      req.headers.set(HttpHeaders.acceptHeader, 'application/vnd.github+json');
       final res = await req.close().timeout(const Duration(seconds: 20));
-      final body = await res.transform(utf8.decoder).join();
-      if (res.statusCode == 404) throw const HttpException('релизов пока нет');
-      if (res.statusCode != 200) throw HttpException('GitHub ответил ${res.statusCode}');
-      return jsonDecode(body);
+      final body = await res.transform(utf8.decoder).join().timeout(const Duration(seconds: 30));
+      if (res.statusCode == 429 || res.statusCode == 403) throw const UpdateLimitedException();
+      return (status: res.statusCode, location: res.headers.value(HttpHeaders.locationHeader), body: body);
     } finally {
       client.close(force: true);
     }
   }
 
-  /// Последний релиз из раздела Releases. [prerelease] — канал «Бета»: учитываются и пре-релизы
-  /// (берётся самая новая версия среди всех опубликованных, черновики пропускаются).
+  /// Запрос без автоматических переходов, но с переходами внутри github.com: если репозиторий
+  /// переименуют или перенесут в организацию, GitHub сначала перенаправляет на новый адрес.
+  /// Возвращает первый ответ, который не является таким «переездом».
+  static Future<({int status, String? location, String body})> _getOnGithub(
+    String url,
+    int? proxyPort, {
+    String method = 'GET',
+    bool Function(String location)? stopAt,
+  }) async {
+    var current = Uri.parse(url);
+    for (var hop = 0;; hop++) {
+      final r = await _get('$current', proxyPort, method: method, followRedirects: false);
+      final location = r.location;
+      final redirect = r.status >= 300 && r.status < 400 && location != null;
+      if (!redirect || hop >= 5 || (stopAt != null && stopAt(location))) return r;
+      final next = current.resolve(location);
+      // Переход на другой сервер (хранилище файлов релиза) — уже не переезд репозитория.
+      if (next.host != 'github.com') return r;
+      current = next;
+    }
+  }
+
+  static final _tagInUrl = RegExp(r'/releases/tag/([^/"<>?#\s]+)');
+
+  /// Последний релиз. Стабильный канал — то, что GitHub считает «Latest» (пре-релизы не в счёт).
+  /// [prerelease] — канал «Бета»: самая новая версия среди всех опубликованных, включая пре-релизы.
   static Future<Release> latest(String repo, {int? proxyPort, bool prerelease = false}) async {
     if (!prerelease) {
-      try {
-        final j = await _getJson('https://api.github.com/repos/$repo/releases/latest', proxyPort);
-        return Release.fromJson(j as Map<String, dynamic>, repo);
-      } on HttpException catch (e) {
-        // Стабильных релизов ещё нет (пока выходят только альфы-пре-релизы) — «Стабильный» канал
-        // получает их, чтобы пользователи с настройками по умолчанию не остались без обновлений.
-        // Как только появится обычный релиз, сюда код больше не попадёт.
-        if (e.message != 'релизов пока нет') rethrow;
-      }
+      // Страница /releases/latest перенаправляет на релиз с тегом — его и читаем из адреса.
+      final r = await _getOnGithub('https://github.com/$repo/releases/latest', proxyPort, stopAt: _tagInUrl.hasMatch);
+      final tag = _tagInUrl.firstMatch(r.location ?? '')?.group(1);
+      if (tag != null) return Release(Uri.decodeComponent(tag), repo);
+      if (r.status >= 500) throw HttpException('GitHub ответил ${r.status}');
+      // Стабильных релизов ещё нет (выходили только пре-релизы) — «Стабильный» канал берёт их,
+      // чтобы пользователи с настройками по умолчанию не остались без обновлений.
     }
-    final list = await _getJson('https://api.github.com/repos/$repo/releases?per_page=30', proxyPort) as List;
-    final releases = [
-      for (final r in list)
-        if (r is Map<String, dynamic> && r['draft'] != true) Release.fromJson(r, repo),
-    ];
-    if (releases.isEmpty) throw const HttpException('релизов пока нет');
-    releases.sort((a, b) => compare(b.version, a.version));
-    return releases.first;
+    final feed = await _get('https://github.com/$repo/releases.atom', proxyPort);
+    if (feed.status == 404) throw const HttpException('релизов пока нет');
+    if (feed.status != 200) throw HttpException('GitHub ответил ${feed.status}');
+    final tags = {for (final m in _tagInUrl.allMatches(feed.body)) Uri.decodeComponent(m.group(1)!)}.toList();
+    if (tags.isEmpty) throw const HttpException('релизов пока нет');
+    tags.sort((a, b) => compare(b, a));
+    return Release(tags.first, repo);
+  }
+
+  /// Прикреплён ли к релизу установщик. Пока GitHub собирает релиз, его ещё нет.
+  static Future<bool> hasInstaller(Release release, {int? proxyPort}) async {
+    // Существующий файл GitHub отдаёт переходом в хранилище, отсутствующий — ответом 404.
+    final r = await _getOnGithub(release.installerUrl, proxyPort, method: 'HEAD');
+    return r.status == 200 || (r.status >= 300 && r.status < 400);
   }
 
   /// SHA-256 файла средствами Windows (certutil) — без сторонних пакетов.
@@ -120,13 +132,19 @@ class Updates {
     return m.group(0)!.replaceAll(' ', '').toLowerCase();
   }
 
+  /// Контрольная сумма установщика из релиза. null — файла с суммой в релизе нет (релизы до 1.0.2).
+  static Future<String?> expectedSha256(Release release, {int? proxyPort}) async {
+    final r = await _get(release.checksumUrl, proxyPort);
+    if (r.status != 200) return null;
+    return RegExp(r'\b[0-9a-fA-F]{64}\b').firstMatch(r.body)?.group(0)?.toLowerCase();
+  }
+
   /// Сверяет скачанный файл с контрольной суммой из релиза. Не совпало — файл удаляется.
-  /// Если GitHub суммы не дал (старые релизы), проверка пропускается: остаётся защита HTTPS.
-  static Future<void> verify(Release release, String url, String path) async {
-    final expected = release.digests[url];
+  /// Если суммы нет ([expected] == null), проверка пропускается: остаётся защита HTTPS.
+  static Future<void> verify(String path, String? expected) async {
     if (expected == null) return;
     final actual = await sha256Of(path);
-    if (actual != expected) {
+    if (actual != expected.toLowerCase()) {
       try {
         await File(path).delete();
       } catch (_) {}
@@ -160,56 +178,5 @@ class Updates {
     if (sa.isEmpty && sb.isNotEmpty) return 1;
     if (sa.isNotEmpty && sb.isEmpty) return -1;
     return sa.compareTo(sb).sign;
-  }
-
-  /// Скачивает архив ядра, распаковывает и заменяет exe. Ядро должно быть остановлено.
-  static Future<void> installCore(CoreSpec core, Release release, {int? proxyPort}) async {
-    final url = release.assetMatching(RegExp(core.assetPattern));
-    if (url == null) throw Exception('В релизе ${core.name} ${release.tag} нет сборки для Windows x64');
-    final tmp = Directory('${Directory.systemTemp.path}\\skipit-update-${DateTime.now().millisecondsSinceEpoch}');
-    await tmp.create(recursive: true);
-    try {
-      final zip = File('${tmp.path}\\core.zip');
-      final client = _client(proxyPort);
-      try {
-        final req = await client.getUrl(Uri.parse(url));
-        req.headers.set(HttpHeaders.userAgentHeader, 'SkipIt-updater');
-        final res = await req.close();
-        if (res.statusCode != 200) throw HttpException('Загрузка ${core.name}: HTTP ${res.statusCode}');
-        await res.pipe(zip.openWrite());
-      } finally {
-        client.close(force: true);
-      }
-      await verify(release, url, zip.path);
-      final out = '${tmp.path}\\x';
-      final r = await Process.run('powershell', [
-        '-NoProfile',
-        '-NonInteractive',
-        '-Command',
-        "Expand-Archive -LiteralPath '${zip.path}' -DestinationPath '$out' -Force",
-      ]);
-      if (r.exitCode != 0) throw Exception('Не удалось распаковать архив ${core.name}');
-      final exe = Directory(out)
-          .listSync(recursive: true)
-          .whereType<File>()
-          .firstWhere((f) => f.path.toLowerCase().endsWith('\\${core.archiveExe}'),
-              orElse: () => throw Exception('В архиве нет ${core.archiveExe}'));
-      await AppPaths.coreDir.create(recursive: true);
-      // Старый файл переименовываем, а не удаляем — если копирование сорвётся, его можно вернуть.
-      final target = File(core.path);
-      final backup = File('${core.path}.old');
-      if (backup.existsSync()) await backup.delete();
-      if (target.existsSync()) await target.rename(backup.path);
-      try {
-        await exe.copy(core.path);
-      } catch (e) {
-        if (backup.existsSync()) await backup.rename(core.path);
-        rethrow;
-      }
-    } finally {
-      try {
-        await tmp.delete(recursive: true);
-      } catch (_) {}
-    }
   }
 }

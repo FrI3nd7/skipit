@@ -1,5 +1,7 @@
 import 'package:flutter/services.dart';
 
+import 'paths.dart';
+
 /// Значок в системном трее. Сам значок и меню живут в C++-оболочке окна
 /// (windows/runner/flutter_window.cpp), здесь — только канал управления.
 class Tray {
@@ -34,7 +36,7 @@ class Tray {
       _call('update', {
         // У Windows ограничение подсказки — 127 символов.
         'tooltip': tooltip.length > 120 ? '${tooltip.substring(0, 119)}…' : tooltip,
-        'open': 'Открыть SkipIt',
+        'open': 'Открыть ${AppPaths.appName}',
         'toggle': connected ? 'Отключить' : 'Подключить',
         'exit': 'Выход',
         'closeToTray': closeToTray,

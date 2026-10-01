@@ -6,6 +6,7 @@
 
 #include "flutter/generated_plugin_registrant.h"
 #include "resource.h"
+#include "utils.h"
 
 namespace {
 
@@ -15,8 +16,12 @@ constexpr UINT kQuitMessage = WM_APP + 2;
 constexpr UINT kCmdOpen = 1;
 constexpr UINT kCmdToggle = 2;
 constexpr UINT kCmdExit = 3;
-constexpr wchar_t kRegKey[] = L"Software\\SkipIt";
 constexpr wchar_t kRegPlacement[] = L"WindowPlacement";
+
+// Положение окна тестовой сборки хранится отдельно от установленной программы.
+const wchar_t* RegKey() {
+  return IsDevBuild() ? L"Software\\SkipIt Dev" : L"Software\\SkipIt";
+}
 
 std::wstring Utf8ToWide(const std::string& s) {
   if (s.empty()) return std::wstring();
@@ -96,7 +101,7 @@ void FlutterWindow::OnDestroy() {
 void FlutterWindow::RestorePlacement() {
   WINDOWPLACEMENT wp{};
   DWORD size = sizeof(wp);
-  if (RegGetValueW(HKEY_CURRENT_USER, kRegKey, kRegPlacement, RRF_RT_REG_BINARY, nullptr, &wp, &size) !=
+  if (RegGetValueW(HKEY_CURRENT_USER, RegKey(), kRegPlacement, RRF_RT_REG_BINARY, nullptr, &wp, &size) !=
           ERROR_SUCCESS ||
       size != sizeof(wp)) {
     return;
@@ -123,7 +128,7 @@ void FlutterWindow::SavePlacement() {
   // Свёрнутое окно запоминаем обычным: открываться свёрнутым оно не должно.
   if (wp.showCmd == SW_SHOWMINIMIZED) wp.showCmd = SW_SHOWNORMAL;
   HKEY key;
-  if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegKey, 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) ==
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, RegKey(), 0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) ==
       ERROR_SUCCESS) {
     RegSetValueExW(key, kRegPlacement, 0, REG_BINARY, reinterpret_cast<const BYTE*>(&wp), sizeof(wp));
     RegCloseKey(key);
@@ -139,7 +144,7 @@ void FlutterWindow::AddTrayIcon() {
   tray_icon_.hIcon = static_cast<HICON>(LoadImageW(
       GetModuleHandle(nullptr), MAKEINTRESOURCEW(IDI_APP_ICON), IMAGE_ICON,
       GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
-  if (tray_icon_.szTip[0] == L'\0') wcscpy_s(tray_icon_.szTip, L"SkipIt");
+  if (tray_icon_.szTip[0] == L'\0') wcscpy_s(tray_icon_.szTip, IsDevBuild() ? L"SkipIt Dev" : L"SkipIt");
   tray_added_ = Shell_NotifyIconW(NIM_ADD, &tray_icon_) != FALSE;
 }
 

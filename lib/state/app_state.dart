@@ -11,6 +11,7 @@ import '../core/paths.dart';
 import '../core/ping.dart';
 import '../core/singbox_config.dart';
 import '../core/updates.dart';
+import '../core/util.dart';
 import '../core/windows.dart';
 import '../core/xray_config.dart';
 import '../models/app_rules.dart';
@@ -46,6 +47,32 @@ class AppState extends ChangeNotifier {
 
   /// Открытый раздел меню — живёт здесь, чтобы пережить перестройку окна при смене темы.
   int pageIndex = 0;
+
+  /// Разделы меню по порядку: главная, маршрутизация, логи, настройки.
+  static const routingPage = 1;
+
+  void openPage(int index) {
+    pageIndex = index;
+    notifyListeners();
+  }
+
+  /// Какая маршрутизация сейчас действует — коротко, для главной.
+  /// У серверов с JSON-конфигом провайдера работают его правила, выбранный профиль не применяется.
+  /// [sites] — правила для сайтов и IP, [apps] — правила по программам (null, если их нет
+  /// или режим подключения их не применяет).
+  ({String sites, String? apps}) get routingSummary {
+    final server = selectedServer;
+    final sites = server != null && XrayConfig.providerConfig(server) != null ? 'Правила провайдера' : selectedRouting.name;
+    final count = appRules.enabledMatches.length;
+    final apps = !usesTun
+        ? null
+        : switch (appRules.mode) {
+            AppRoutingMode.off => null,
+            AppRoutingMode.allExcept => count == 0 ? null : 'Программ напрямую, мимо VPN: $count',
+            AppRoutingMode.onlySelected => 'Через VPN только выбранные программы: $count',
+          };
+    return (sites: sites, apps: apps);
+  }
   String? lastError;
   DateTime? connectedAt;
   bool pinging = false;
@@ -62,9 +89,24 @@ class AppState extends ChangeNotifier {
   // Загрузка / сохранение
   // ---------------------------------------------------------------------------
 
-  Future<void> init(List<String> args) async {
-    log.attachFile(AppPaths.logFile);
+  /// Читает сохранённые настройки и подписки. Вызывается до показа окна: по настройкам решается,
+  /// нужно ли сначала перезапуститься с правами администратора.
+  Future<void> load() async {
+    if (_loaded) return;
+    _loaded = true;
     await _load();
+  }
+
+  bool _loaded = false;
+
+  /// Настройка «Запускать от имени администратора» включена, а прав нет — нужно перезапуститься.
+  /// После отказа в окне Windows (ключ --no-elevate) повторно не спрашиваем.
+  bool needsElevation(List<String> args) =>
+      settings.runAsAdmin && !isAdmin && !args.contains('--elevated') && !args.contains('--no-elevate');
+
+  Future<void> init(List<String> args) async {
+    unawaited(log.open(AppPaths.logDir));
+    await load();
     // Окно должно узнать о данных сразу, даже если дальше что-то пойдёт не так.
     notifyListeners();
 
@@ -85,7 +127,8 @@ class AppState extends ChangeNotifier {
     Timer(const Duration(seconds: 8), () => step('обновления', () => checkUpdates(silent: true)));
     notifyListeners();
 
-    _subsTimer = Timer.periodic(const Duration(minutes: 10), (_) => _updateDueSubscriptions());
+    // Раз в минуту смотрим, не пора ли обновить подписки (проверка дешёвая — сравнение времени).
+    _subsTimer = Timer.periodic(const Duration(minutes: 1), (_) => _updateDueSubscriptions());
     if (settings.updateSubsOnStart) unawaited(_updateDueSubscriptions(force: true));
 
     await handleArgs(args);
@@ -213,6 +256,7 @@ class AppState extends ChangeNotifier {
   Future<void> shutdown() async {
     await disconnect();
     await saveNow();
+    log.close();
   }
 
   void toast(String msg) => _messages.add(msg);
@@ -332,8 +376,35 @@ class AppState extends ChangeNotifier {
 
   Future<void> _updateDueSubscriptions({bool force = false}) async {
     for (final s in List.of(subscriptions)) {
-      if (force || s.isDue) await updateSubscription(s, silent: true);
+      if (!force && !s.isDue) continue;
+      // После неудачи повторяем не чаще раза в 5 минут, а не каждую минуту.
+      final failed = _subRetryAfter[s.id];
+      if (!force && failed != null && DateTime.now().isBefore(failed)) continue;
+      await updateSubscription(s, silent: true);
+      if (s.error != null) {
+        _subRetryAfter[s.id] = DateTime.now().add(const Duration(minutes: 5));
+      } else {
+        _subRetryAfter.remove(s.id);
+        if (!force) log.add('subscription', '«${s.displayName}» обновлена автоматически');
+      }
     }
+  }
+
+  final _subRetryAfter = <String, DateTime>{};
+
+  /// Загрузка подписки с общим ограничением по времени: зависший запрос не должен навсегда
+  /// блокировать следующие обновления. Если через VPN не получилось — пробуем напрямую.
+  Future<FetchedSubscription> _fetchSubscription(Subscription sub) async {
+    const limit = Duration(seconds: 45);
+    final viaProxy = isConnected && settings.updateViaProxy ? (_session ?? settings).httpPort : null;
+    if (viaProxy != null) {
+      try {
+        return await Net.fetchSubscription(sub.url, settings, proxyPort: viaProxy).timeout(limit);
+      } catch (e) {
+        log.add('subscription', '${sub.displayName}: через VPN не удалось ($e), пробую напрямую');
+      }
+    }
+    return Net.fetchSubscription(sub.url, settings).timeout(limit);
   }
 
   Future<void> updateAllSubscriptions() => _updateDueSubscriptions(force: true);
@@ -342,8 +413,7 @@ class AppState extends ChangeNotifier {
     if (!updatingSubs.add(sub.id)) return;
     notifyListeners();
     try {
-      final viaProxy = isConnected && settings.updateViaProxy ? (_session ?? settings).httpPort : null;
-      final fetched = await Net.fetchSubscription(sub.url, settings, proxyPort: viaProxy);
+      final fetched = await _fetchSubscription(sub);
       sub.applyMeta(fetched.meta);
       sub.lastUpdated = DateTime.now();
       sub.error = null;
@@ -385,11 +455,11 @@ class AppState extends ChangeNotifier {
         final rd = RoutingProfile.parseDeeplink(routingLink);
         if (rd != null) _applyRoutingDeeplink(rd, subscriptionId: sub.id);
       }
-      if (!silent) toast('«${sub.displayName}»: серверов ${fresh.length}');
+      if (!silent) toast('Подписка «${sub.displayName}» обновлена — серверов: ${fresh.length}');
     } catch (e) {
-      sub.error = e.toString();
+      sub.error = describeNetError(e);
       log.add('subscription', '${sub.displayName}: $e');
-      if (!silent) toast('Не удалось обновить «${sub.displayName}»: $e');
+      if (!silent) toast('Не удалось обновить «${sub.displayName}»: ${sub.error}');
     } finally {
       updatingSubs.remove(sub.id);
       changed();
@@ -446,17 +516,6 @@ class AppState extends ChangeNotifier {
     return ok.firstOrNull;
   }
 
-  Future<void> selectBest(List<ServerProfile> list) async {
-    await ping(list);
-    final best = bestOf(list);
-    if (best == null) {
-      toast('Нет доступных серверов');
-      return;
-    }
-    await selectServer(best.id);
-    toast('Выбран ${best.name} (${best.delayMs} мс)');
-  }
-
   // ---------------------------------------------------------------------------
   // Подключение
   // ---------------------------------------------------------------------------
@@ -488,6 +547,14 @@ class AppState extends ChangeNotifier {
     await disconnect(keepError: true);
     await connect();
   }
+
+  /// Правила по приложениям, с которыми поднят текущий TUN (null — TUN не запущен).
+  String? _appliedAppRules;
+
+  /// Правила по приложениям в окне отличаются от тех, что сейчас действуют: нужно переподключение.
+  /// Считается сравнением, а не флажком «что-то трогали»: вернули всё как было или переподключились
+  /// любым способом — и просьба применить исчезает сама.
+  bool get appRulesPending => _appliedAppRules != null && _appliedAppRules != appRules.signature;
 
   /// Настройки текущего подключения: те же, что в [settings], но с реально занятыми портами
   /// (если порт из настроек держит другая программа, берётся свободный).
@@ -526,12 +593,15 @@ class AppState extends ChangeNotifier {
     lastError = null;
     status = ConnStatus.connecting;
     notifyListeners();
+    // Каждое подключение — отдельный отрезок журнала (раздел «Логи»).
+    log.startSession(selectedServer?.name ?? 'Сервер не выбран', detail: settings.mode.label);
+    log.add('app', 'Подключение…');
     try {
       if (usesTun && !isAdmin) throw NeedAdminException();
 
       // Два VPN с TUN одновременно дерутся за маршруты — сеть ломается до перезагрузки.
       if (usesTun) {
-        final other = await WinSys.otherVpnAdapters();
+        final other = WinSys.otherVpnAdapters();
         if (other.isNotEmpty) {
           throw CoreException('Включён другой VPN (${other.join(', ')}). Отключите его и подключитесь снова — '
               'два VPN одновременно мешают друг другу и ломают сеть.');
@@ -578,7 +648,7 @@ class AppState extends ChangeNotifier {
         throw CoreException('Xray не запустился:\n${log.tail(8, source: 'xray')}');
       }
       // Ядро могло открыть порт и тут же упасть на следующей ошибке конфига — проверяем, что оно живо.
-      await Future.delayed(const Duration(milliseconds: 500));
+      await Future.delayed(const Duration(milliseconds: 250));
       if (!_xray.running) throw CoreException('Xray завершился сразу после запуска:\n${log.tail(8, source: 'xray')}');
 
       if (usesTun) {
@@ -586,10 +656,16 @@ class AppState extends ChangeNotifier {
           if (InternetAddress.tryParse(server.address) == null && server.address.isNotEmpty) server.address,
         ];
         final tun = SingboxConfig.build(settings: session, routing: routing, apps: appRules, serverDomains: domains);
+        _appliedAppRules = appRules.signature;
         await File(AppPaths.tunConfigFile).writeAsString(const JsonEncoder.withIndent('  ').convert(tun));
         await _singbox.start(AppPaths.singboxExe, ['run', '-c', AppPaths.tunConfigFile]);
         settings.lastSingboxPid = _singbox.pid;
-        await Future.delayed(const Duration(milliseconds: 1500));
+        // Ждём не фиксированное время, а пока трафик действительно не пойдёт через наш адаптер.
+        // Если за 3 секунды этого не видно, но sing-box жив — считаем, что он поднялся.
+        final deadline = DateTime.now().add(const Duration(seconds: 3));
+        while (_singbox.running && !WinSys.ownTunActive() && DateTime.now().isBefore(deadline)) {
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
         if (!_singbox.running) {
           throw CoreException('Не удалось поднять TUN:\n${log.tail(8, source: 'sing-box')}');
         }
@@ -603,6 +679,7 @@ class AppState extends ChangeNotifier {
 
       status = ConnStatus.connected;
       connectedAt = DateTime.now();
+      log.add('app', 'Подключено');
       stats.reset();
       _statsTimer?.cancel();
       _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
@@ -614,6 +691,7 @@ class AppState extends ChangeNotifier {
       lastError = e.toString();
       log.add('app', 'Ошибка подключения: $e');
       await _teardown();
+      log.endSession();
       status = ConnStatus.disconnected;
       notifyListeners();
       if (e is NeedAdminException) rethrow;
@@ -625,6 +703,8 @@ class AppState extends ChangeNotifier {
     status = ConnStatus.disconnecting;
     notifyListeners();
     await _teardown();
+    log.add('app', 'Отключено');
+    log.endSession();
     if (!keepError) lastError = null;
     status = ConnStatus.disconnected;
     connectedAt = null;
@@ -641,6 +721,7 @@ class AppState extends ChangeNotifier {
     await _singbox.stop();
     await _xray.stop();
     _session = null;
+    _appliedAppRules = null;
     settings.lastXrayPid = settings.lastSingboxPid = null;
     await saveNow();
   }
@@ -699,13 +780,13 @@ class AppState extends ChangeNotifier {
   // Версии и обновления
   // ---------------------------------------------------------------------------
 
-  /// Установленные версии ядер: CoreSpec.name → версия (null — ядро не найдено).
+  /// Версии вложенных ядер: CoreSpec.name → версия (null — ядро не найдено). Только для показа:
+  /// ядра обновляются вместе с программой, сама она их не скачивает.
   final coreVersions = <String, String?>{};
 
-  /// Найденные обновления: имя ядра (или 'app') → релиз.
-  final availableUpdates = <String, Release>{};
+  /// Найденная новая версия SkipIt (null — обновлений нет или ещё не проверяли).
+  Release? appUpdate;
   bool checkingUpdates = false;
-  bool installingCores = false;
   DateTime? lastUpdateCheck;
 
   Future<void> detectCoreVersions() async {
@@ -717,45 +798,34 @@ class AppState extends ChangeNotifier {
 
   int? get _updateProxy => isConnected ? (_session ?? settings).httpPort : null;
 
-  /// [silent] — фоновая проверка при запуске: сообщает только о найденных обновлениях.
+  /// [silent] — фоновая проверка при запуске: сообщает только о найденном обновлении.
   Future<void> checkUpdates({bool silent = false}) async {
     if (checkingUpdates) return;
+    // Тестовая сборка не обновляется из релизов: установщик заменил бы установленную программу.
+    if (AppPaths.isDev || appRepo.isEmpty) {
+      if (!silent) toast('Тестовая сборка не обновляется из релизов');
+      return;
+    }
     checkingUpdates = true;
-    availableUpdates.clear();
+    appUpdate = null;
     notifyListeners();
-    final errors = <String>[];
     try {
-      await detectCoreVersions();
-      if (appRepo.isNotEmpty) {
-        try {
-          final r = await Updates.latest(appRepo,
-              proxyPort: _updateProxy, prerelease: settings.updateChannel == UpdateChannel.beta);
-          // Релиз без установщика — значит, GitHub его ещё собирает: не предлагаем, пока не будет готов.
-          final hasInstaller = r.assetMatching(RegExp(r'^SkipIt-Setup.*\.exe$', caseSensitive: false)) != null;
-          if (hasInstaller && Updates.compare(r.version, appVersion) > 0) availableUpdates['app'] = r;
-        } catch (e) {
-          errors.add('SkipIt: $e');
-        }
-      }
-      for (final core in CoreSpec.all) {
-        try {
-          final r = await Updates.latest(core.repo, proxyPort: _updateProxy);
-          final installed = coreVersions[core.name];
-          if (installed == null || Updates.compare(r.version, installed) > 0) availableUpdates[core.name] = r;
-        } catch (e) {
-          errors.add('${core.name}: $e');
-        }
+      final r = await Updates.latest(appRepo,
+          proxyPort: _updateProxy, prerelease: settings.updateChannel == UpdateChannel.beta);
+      // Релиз без установщика — значит, GitHub его ещё собирает: не предлагаем, пока не будет готов.
+      if (Updates.compare(r.version, appVersion) > 0 && await Updates.hasInstaller(r, proxyPort: _updateProxy)) {
+        appUpdate = r;
       }
       lastUpdateCheck = DateTime.now();
-      if (errors.isNotEmpty) {
-        for (final e in errors) {
-          log.add('update', e);
-        }
-        if (!silent) toast('Не всё удалось проверить: ${errors.first}');
-      } else if (availableUpdates.isEmpty) {
-        if (!silent) toast('Всё актуально');
-      } else {
-        toast('Доступны обновления: ${availableUpdates.keys.map((k) => k == 'app' ? 'SkipIt' : k).join(', ')}');
+      if (appUpdate != null) {
+        toast('Доступна новая версия SkipIt: ${appUpdate!.version}');
+      } else if (!silent) {
+        toast('У вас последняя версия');
+      }
+    } catch (e) {
+      log.add('update', 'Проверка обновлений: $e');
+      if (!silent) {
+        toast(e is UpdateLimitedException ? '$e' : 'Не удалось проверить обновления: ${describeNetError(e)}');
       }
     } finally {
       checkingUpdates = false;
@@ -763,50 +833,21 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  /// Ставит найденные обновления ядер. Во время установки VPN отключается и потом включается снова.
-  Future<void> installCoreUpdates() async {
-    final cores = CoreSpec.all.where((c) => availableUpdates.containsKey(c.name)).toList();
-    if (cores.isEmpty || installingCores) return;
-    installingCores = true;
-    notifyListeners();
-    final wasConnected = isConnected;
-    // Заменить exe можно только у остановленного ядра, поэтому качаем уже без туннеля.
-    try {
-      if (wasConnected) await disconnect();
-      for (final core in cores) {
-        final release = availableUpdates[core.name]!;
-        log.add('update', 'Устанавливаю ${core.name} ${release.version}…');
-        await Updates.installCore(core, release);
-        availableUpdates.remove(core.name);
-      }
-      await detectCoreVersions();
-      toast('Ядра обновлены');
-    } catch (e) {
-      log.add('update', 'Ошибка обновления: $e');
-      toast('Не удалось обновить ядра: $e');
-    } finally {
-      installingCores = false;
-      notifyListeners();
-      if (wasConnected) unawaited(connect());
-    }
-  }
-
   bool downloadingAppUpdate = false;
 
-  /// Скачивает установщик новой версии SkipIt из релиза на GitHub. null — в релизе нет установщика.
+  /// Скачивает установщик новой версии SkipIt из релиза на GitHub и сверяет его контрольную сумму.
   Future<String?> downloadAppUpdate() async {
-    final release = availableUpdates['app'];
+    final release = appUpdate;
     if (release == null || downloadingAppUpdate) return null;
-    final url = release.assetMatching(RegExp(r'^SkipIt-Setup.*\.exe$', caseSensitive: false));
-    if (url == null) return null;
     downloadingAppUpdate = true;
     notifyListeners();
     try {
-      final path = '${Directory.systemTemp.path}\\SkipIt-Setup-${release.version}.exe';
-      await Net.download(url, path, proxyPort: _updateProxy);
+      final path = '${Directory.systemTemp.path}\\${release.installerName}';
+      await Net.download(release.installerUrl, path, proxyPort: _updateProxy);
       // Запускаем только то, что совпало с контрольной суммой из релиза.
-      await Updates.verify(release, url, path);
-      log.add('update', 'Скачан и проверен установщик ${release.version}');
+      final expected = await Updates.expectedSha256(release, proxyPort: _updateProxy);
+      await Updates.verify(path, expected);
+      log.add('update', 'Скачан установщик ${release.version}${expected != null ? ', контрольная сумма совпала' : ''}');
       return path;
     } finally {
       downloadingAppUpdate = false;

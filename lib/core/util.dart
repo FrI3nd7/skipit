@@ -1,8 +1,25 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 final _random = Random();
 
+/// Понятное описание сетевой ошибки для пользователя (подробности остаются в журнале).
+String describeNetError(Object e) {
+  if (e is TimeoutException) return 'Сервер не ответил вовремя';
+  if (e is SocketException) {
+    // 10013 / 10057 — Windows не дала открыть соединение: так выглядит блокировка файрволом
+    // (например, simplewall ещё не разрешил новый файл программы).
+    final code = e.osError?.errorCode;
+    if (code == 10013 || code == 10057) {
+      return 'Соединение заблокировано. Если установлен файрвол или антивирус — разрешите в нём SkipIt';
+    }
+    return 'Нет соединения с сервером — проверьте интернет';
+  }
+  if (e is HandshakeException) return 'Не удалось установить защищённое соединение с сервером';
+  return e.toString().replaceFirst(RegExp(r'^(Http)?Exception: '), '');
+}
 String newId() =>
     '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
     '${_random.nextInt(0x7fffffff).toRadixString(36)}';

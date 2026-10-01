@@ -167,15 +167,20 @@ ThemeData buildTheme() {
       hoverColor: Colors.transparent,
       isDense: true,
       contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide(color: C.border)),
-      enabledBorder: WidgetStateInputBorder.resolveWith((states) => OutlineInputBorder(
+      // Одна рамка на все состояния. Именно `border`: только его Flutter «разворачивает» по состояниям —
+      // заданная через enabledBorder такая рамка рисовалась с почти квадратными углами.
+      border: WidgetStateInputBorder.resolveWith((states) => OutlineInputBorder(
             borderRadius: BorderRadius.circular(12),
             borderSide: BorderSide(
-              color: states.contains(WidgetState.hovered) ? C.orange.withValues(alpha: 0.55) : C.border,
+              color: states.contains(WidgetState.error)
+                  ? C.red
+                  : states.contains(WidgetState.focused)
+                      ? C.orange
+                      : states.contains(WidgetState.hovered)
+                          ? C.orange.withValues(alpha: 0.55)
+                          : C.border,
             ),
           )),
-      focusedBorder:
-          OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: C.orange)),
       labelStyle: TextStyle(color: C.muted),
       hintStyle: TextStyle(color: C.muted),
     ),
@@ -194,14 +199,20 @@ ThemeData buildTheme() {
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
       ),
     ),
-    popupMenuTheme: PopupMenuThemeData(
-      color: C.surface,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12), side: BorderSide(color: C.border)),
-    ),
     tooltipTheme: TooltipThemeData(
       decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(8), border: Border.all(color: C.border)),
       textStyle: TextStyle(color: C.text, fontSize: 12),
     ),
-    scrollbarTheme: ScrollbarThemeData(thumbColor: WidgetStateProperty.all(C.border)),
+    // Ползунок прокрутки заметный на любом фоне; под курсором и при перетаскивании — оранжевый.
+    scrollbarTheme: ScrollbarThemeData(
+      thumbColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.dragged)
+          ? C.orange
+          : s.contains(WidgetState.hovered)
+              ? C.orange.withValues(alpha: 0.8)
+              : C.muted.withValues(alpha: 0.55)),
+      thickness: WidgetStateProperty.all(7),
+      radius: const Radius.circular(4),
+      thumbVisibility: WidgetStateProperty.all(true),
+    ),
   );
 }

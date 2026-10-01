@@ -5,6 +5,7 @@ import '../core/xray_config.dart';
 import '../models/routing.dart';
 import '../state/app_scope.dart';
 import '../state/app_state.dart';
+import 'app_menu.dart';
 import 'flag_text.dart';
 import 'shell.dart';
 import 'smooth_scroll.dart';
@@ -35,19 +36,13 @@ class RoutingPage extends StatelessWidget {
 
   /// Меню «Создать»: пустой профиль или один из шаблонов.
   Future<void> _createMenu(BuildContext btnContext, AppState state) async {
-    final box = btnContext.findRenderObject() as RenderBox;
-    final topLeft = box.localToGlobal(Offset(0, box.size.height + 6));
     final templates = RoutingProfile.templates();
-    final choice = await showMenu<int>(
-      context: btnContext,
-      position: RelativeRect.fromLTRB(topLeft.dx, topLeft.dy, topLeft.dx + box.size.width, 0),
-      items: [
-        const PopupMenuItem(value: -1, child: Text('Пустой профиль')),
-        const PopupMenuDivider(),
-        for (var i = 0; i < templates.length; i++)
-          PopupMenuItem(value: i, child: Text('Шаблон: ${templates[i].name}')),
-      ],
-    );
+    final choice = await showAppMenu<int>(btnContext, items: [
+      const AppMenuItem(-1, 'Пустой профиль', icon: Icons.note_add_outlined),
+      const AppMenuItem.divider(),
+      for (var i = 0; i < templates.length; i++)
+        AppMenuItem(i, 'Шаблон: ${templates[i].name}', icon: Icons.auto_awesome_outlined),
+    ]);
     if (choice == null || !btnContext.mounted) return;
     if (choice == -1) {
       await _edit(btnContext, state, null);

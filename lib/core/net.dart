@@ -63,7 +63,8 @@ class Net {
         req.headers.set('x-device-model', Platform.localHostname);
       }
       final res = await req.close().timeout(const Duration(seconds: 30));
-      final body = await res.transform(utf8.decoder).join();
+      // Тело читаем тоже с ограничением: оборвавшееся соединение иначе «висело» бы бесконечно.
+      final body = await res.transform(utf8.decoder).join().timeout(const Duration(seconds: 30));
       if (res.statusCode >= 400) {
         throw HttpException('Сервер ответил ${res.statusCode}');
       }

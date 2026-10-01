@@ -1,6 +1,10 @@
-﻿# Скачивает ядра Xray-core и sing-box (последние релизы с GitHub) в папку core\
-# и, если нужно, создаёт Windows-обвязку Flutter-проекта.
+﻿# Скачивает ядра Xray-core и sing-box в папку core\ и, если нужно, создаёт Windows-обвязку Flutter-проекта.
 #   powershell -ExecutionPolicy Bypass -File tools\setup.ps1
+#
+# Версии ядер задаёт разработчик в tools\cores.json — программа у пользователей ядра сама не обновляет.
+# Чтобы обновить ядро: поменяйте там "version" (тег релиза) и "sha256" (контрольная сумма zip-архива
+# для Windows x64 со страницы релиза; пустая строка — не проверять), затем запустите этот скрипт.
+# Уже скачанное ядро нужной версии повторно не качается.
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -10,33 +14,63 @@ $root = Split-Path -Parent $PSScriptRoot
 $core = Join-Path $root 'core'
 $tmp = Join-Path $env:TEMP 'skipit-setup'
 New-Item -ItemType Directory -Force $core, $tmp | Out-Null
+$cores = Get-Content (Join-Path $PSScriptRoot 'cores.json') -Raw | ConvertFrom-Json
 
-function Get-LatestAsset($repo, $pattern) {
-    $headers = @{ 'User-Agent' = 'skipit-setup' }
-    # В GitHub Actions токен снимает лимит 60 запросов/час на API.
-    if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
-    $rel = Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest" -Headers $headers
-    $asset = $rel.assets | Where-Object { $_.name -match $pattern } | Select-Object -First 1
-    if (-not $asset) { throw "Не найден файл $pattern в релизе $repo $($rel.tag_name)" }
-    Write-Host "  $repo $($rel.tag_name): $($asset.name) ($([math]::Round($asset.size / 1MB, 1)) МБ)"
-    return $asset.browser_download_url
+# Версия уже лежащего в core\ ядра (пустая строка — ядра нет или оно не запускается).
+function Get-InstalledVersion($exe, $pattern) {
+    if (-not (Test-Path $exe)) { return '' }
+    try {
+        $out = (& $exe version 2>$null | Out-String)
+        if ($out -match $pattern) { return $Matches[1] }
+    } catch {}
+    return ''
 }
 
-Write-Host 'Xray-core...'
-$url = Get-LatestAsset 'XTLS/Xray-core' '^Xray-windows-64\.zip$'
-$zip = Join-Path $tmp 'xray.zip'
-Invoke-WebRequest $url -OutFile $zip
-Expand-Archive $zip -DestinationPath (Join-Path $tmp 'xray') -Force
-# Свои имена ядер — чтобы другие VPN-клиенты не закрывали их как «чужие» xray.exe.
-Copy-Item (Join-Path $tmp 'xray\xray.exe') (Join-Path $core 'skipit-xray.exe') -Force
+# Скачивает архив релиза по прямой ссылке (без API GitHub и его лимитов) и сверяет контрольную сумму.
+function Get-CoreArchive($name, $url, $sha256) {
+    $zip = Join-Path $tmp "$name.zip"
+    Write-Host "  $url"
+    Invoke-WebRequest $url -OutFile $zip -UseBasicParsing
+    if ($sha256) {
+        $actual = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+        if ($actual -ne $sha256.ToLower()) { throw "$name`: контрольная сумма архива не совпала ($actual)" }
+    }
+    $dir = Join-Path $tmp $name
+    Expand-Archive $zip -DestinationPath $dir -Force
+    return $dir
+}
 
-Write-Host 'sing-box...'
-$url = Get-LatestAsset 'SagerNet/sing-box' '^sing-box-[\d.]+-windows-amd64\.zip$'
-$zip = Join-Path $tmp 'sing-box.zip'
-Invoke-WebRequest $url -OutFile $zip
-Expand-Archive $zip -DestinationPath (Join-Path $tmp 'sing-box') -Force
-$sb = Get-ChildItem (Join-Path $tmp 'sing-box') -Recurse -Filter 'sing-box.exe' | Select-Object -First 1
-Copy-Item $sb.FullName (Join-Path $core 'skipit-sing-box.exe') -Force
+$xrayVersion = $cores.xray.version -replace '^v', ''
+$xrayExe = Join-Path $core 'skipit-xray.exe'
+if ((Get-InstalledVersion $xrayExe 'Xray ([\d.]+)') -eq $xrayVersion -and (Test-Path (Join-Path $core 'LICENSE-Xray.txt'))) {
+    Write-Host "Xray-core $xrayVersion уже на месте"
+} else {
+    Write-Host "Xray-core $xrayVersion..."
+    $dir = Get-CoreArchive 'xray' "https://github.com/XTLS/Xray-core/releases/download/$($cores.xray.version)/Xray-windows-64.zip" $cores.xray.sha256
+    # Свои имена ядер — чтобы другие VPN-клиенты не закрывали их как «чужие» xray.exe.
+    Copy-Item (Join-Path $dir 'xray.exe') $xrayExe -Force
+    # Текст лицензии (MPL-2.0) кладём рядом с ядром.
+    Copy-Item (Join-Path $dir 'LICENSE') (Join-Path $core 'LICENSE-Xray.txt') -Force
+}
+
+$sbVersion = $cores.'sing-box'.version -replace '^v', ''
+$sbExe = Join-Path $core 'skipit-sing-box.exe'
+$sbLicense = Join-Path $core 'LICENSE-sing-box.txt'
+if ((Get-InstalledVersion $sbExe 'sing-box version ([\d.]+)') -eq $sbVersion) {
+    Write-Host "sing-box $sbVersion уже на месте"
+    # Ядро скачано раньше, чем скрипт начал сохранять лицензию, — докачиваем только её текст.
+    if (-not (Test-Path $sbLicense)) {
+        Invoke-WebRequest "https://raw.githubusercontent.com/SagerNet/sing-box/$($cores.'sing-box'.version)/LICENSE" -OutFile $sbLicense -UseBasicParsing
+    }
+} else {
+    Write-Host "sing-box $sbVersion..."
+    $dir = Get-CoreArchive 'sing-box' "https://github.com/SagerNet/sing-box/releases/download/$($cores.'sing-box'.version)/sing-box-$sbVersion-windows-amd64.zip" $cores.'sing-box'.sha256
+    $sb = Get-ChildItem $dir -Recurse -Filter 'sing-box.exe' | Select-Object -First 1
+    Copy-Item $sb.FullName $sbExe -Force
+    # GPL-3.0 требует передавать текст лицензии вместе с программой.
+    $license = Get-ChildItem $dir -Recurse -Filter 'LICENSE' | Select-Object -First 1
+    Copy-Item $license.FullName $sbLicense -Force
+}
 
 Remove-Item $tmp -Recurse -Force
 Write-Host "Ядра лежат в $core" -ForegroundColor Green

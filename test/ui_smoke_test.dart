@@ -60,6 +60,13 @@ void main() {
         state.servers.addAll(parsed.servers);
         state.servers.addAll(LinkParser.parseText('[{"remarks":"🇫🇮 Finland JSON","outbounds":[{"tag":"proxy","protocol":"vless","settings":{"vnext":[{"address":"f.com","port":443,"users":[{"id":"x"}]}]},"streamSettings":{"network":"raw","security":"reality"}}]}]').servers);
         state.settings.selectedServerId = parsed.servers.first.id;
+        // Журнал: прошлое подключение с ошибкой и текущий отрезок без подключения.
+        state.log
+          ..startSession(parsed.servers.first.name, detail: 'Смешанный')
+          ..add('xray', '[Warning] proxy/http: failed to read response from ipv6.msftconnecttest.com > unexpected EOF')
+          ..add('app', 'Ошибка подключения: порт занят')
+          ..endSession()
+          ..add('subscription', '«SkipIt VPN» обновлена автоматически');
         await tester.pumpWidget(AppScope(
           state: state,
           child: MaterialApp(theme: buildTheme(), home: const Shell()),
@@ -67,6 +74,38 @@ void main() {
         await tester.pump(const Duration(milliseconds: 400));
         // Подписи пунктов меню в свёрнутом виде не удаляются, а прячутся анимацией.
         expect(find.text('Главная'), findsOneWidget);
+
+        // Меню подписки («…» в заголовке группы) открывается, в нём нет «Выбрать самый быстрый»,
+        // выбор пункта закрывает меню и выполняет действие.
+        await tester.tap(find.byIcon(Icons.more_horiz_rounded).last);
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.text('Удалить подписку'), findsOneWidget);
+        expect(find.text('Выбрать самый быстрый'), findsNothing);
+        await tester.tap(find.text('Скопировать ссылку'));
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.text('Удалить подписку'), findsNothing);
+
+        // Поиск: по названию сервера; по протоколу не ищет; крестик очищает поле.
+        await tester.enterText(find.byType(TextField).first, 'vless');
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.textContaining('ничего не найдено'), findsOneWidget);
+        await tester.enterText(find.byType(TextField).first, 'germ');
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('NoFlag'), findsNothing);
+        await tester.tap(find.byIcon(Icons.close_rounded).first);
+        await tester.pump(const Duration(milliseconds: 100));
+        expect(find.text('NoFlag'), findsOneWidget);
+
+        // Меню сервера: проверка задержки и просмотр JSON, без «Скопировать ссылку» и «Переименовать».
+        await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(find.text('Проверить задержку'), findsOneWidget);
+        expect(find.text('Переименовать'), findsNothing);
+        await tester.tap(find.text('Показать JSON'));
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(find.textContaining('"outbounds"'), findsOneWidget);
+        await tester.tap(find.text('Закрыть'));
+        await tester.pump(const Duration(milliseconds: 400));
 
         // Пройти по всем разделам меню.
         for (final icon in [

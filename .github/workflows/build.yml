@@ -41,10 +41,9 @@ jobs:
         shell: pwsh
         run: choco install innosetup -y --no-progress
 
+      # Версии ядер заданы в tools/cores.json — их выбирает разработчик, программа ядра сама не обновляет.
       - name: Ядра Xray и sing-box
         shell: pwsh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: ./tools/setup.ps1
 
       - name: Тесты
@@ -59,14 +58,33 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: SkipIt-Setup
-          path: build/installer/*.exe
+          path: |
+            build/installer/*.exe
+            build/installer/*.sha256
 
+      # Сначала контрольная сумма, потом установщик: программа предлагает обновление, когда видит
+      # установщик, и к этому моменту файл с суммой уже должен быть на месте.
       - name: Прикрепить установщик к релизу
         if: github.event_name == 'release'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload '${{ github.event.release.tag_name }}' (Get-ChildItem build/installer/*.exe).FullName --clobber
+        run: |
+          $tag = '${{ github.event.release.tag_name }}'
+          gh release upload $tag (Get-ChildItem build/installer/*.sha256).FullName --clobber
+          gh release upload $tag (Get-ChildItem build/installer/*.exe).FullName --clobber
+
+      # GPL-3.0: вместе с sing-box отдаём исходный код именно той версии, что вложена в установщик.
+      - name: Исходники sing-box к релизу
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $v = (Get-Content tools/cores.json -Raw | ConvertFrom-Json).'sing-box'.version
+          $file = "sing-box-$($v -replace '^v', '')-source.zip"
+          Invoke-WebRequest "https://github.com/SagerNet/sing-box/archive/refs/tags/$v.zip" -OutFile $file
+          gh release upload '${{ github.event.release.tag_name }}' $file --clobber
 
       # Флаг pre-release выставляется по номеру версии, а не по галочке в форме —
       # чтобы его нельзя было забыть: буква в конце (1.0.0a, 1.0.2b) → pre-release,

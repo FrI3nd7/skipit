@@ -15,10 +15,9 @@ import 'theme.dart';
 import 'widgets.dart';
 
 /// Скачивает установщик новой версии, запускает его и закрывает программу (чтобы файлы можно было заменить).
-/// Если установщика в релизе нет — открывает страницу релиза.
 Future<void> installAppUpdate(BuildContext context) async {
   final state = AppScope.read(context);
-  final release = state.availableUpdates['app'];
+  final release = state.appUpdate;
   if (release == null) return;
   String? installer;
   try {
@@ -27,10 +26,7 @@ Future<void> installAppUpdate(BuildContext context) async {
     state.toast('Не удалось скачать обновление: $e');
     return;
   }
-  if (installer == null) {
-    await WinSys.openUrl(release.pageUrl);
-    return;
-  }
+  if (installer == null) return;
   if (!context.mounted) return;
   final ok = await confirm(context, 'Обновить SkipIt до ${release.version}?',
       'VPN отключится, программа закроется и откроется установщик новой версии.',
@@ -120,6 +116,8 @@ class SettingsPage extends StatelessWidget {
           _Row(
             title: 'Права администратора',
             subtitle: state.isAdmin ? 'Есть — режим TUN доступен' : 'Нет — для режима TUN нужен перезапуск',
+            // Без прав TUN не включится — подпись красная, чтобы это было видно сразу.
+            subtitleColor: state.isAdmin ? null : C.red,
             trailing: state.isAdmin
                 ? Icon(Icons.verified_user_rounded, color: C.green)
                 : GhostButton(
@@ -134,6 +132,9 @@ class SettingsPage extends StatelessWidget {
                     },
                   ),
           ),
+          toggle('Запускать от имени администратора',
+              'Нужно для режимов TUN и «Смешанный». При запуске Windows спросит разрешение', s.runAsAdmin,
+              (v) => s.runAsAdmin = v),
           toggle('Запускать вместе с Windows', 'Запускать приложение при входе в Windows', state.autostart,
               (v) => state.setAutostart(v)),
           toggle('Сворачивать в трей при закрытии', 'Крестик прячет окно в трей, VPN продолжает работать. Выход — через меню значка в трее',
@@ -205,7 +206,7 @@ class SettingsPage extends StatelessWidget {
         _Section('О приложении', [
           _Row(
             title: 'Папка данных',
-            subtitle: 'Настройки, подписки и журнал app.log',
+            subtitle: 'Настройки, подписки и журнал (папка logs)',
             trailing: GhostButton(
               label: 'Открыть',
               icon: Icons.folder_open_rounded,
@@ -216,12 +217,12 @@ class SettingsPage extends StatelessWidget {
             title: 'Версия SkipIt',
             subtitle: [
               appVersion,
-              if (state.availableUpdates['app'] != null) 'доступна ${state.availableUpdates['app']!.version}',
-              if (appRepo.isEmpty) 'обновления приложения появятся после публикации на GitHub',
+              if (AppPaths.isDev) 'тестовая сборка, данные отдельно от установленной программы',
+              if (state.appUpdate != null) 'доступна ${state.appUpdate!.version}',
               if (state.lastUpdateCheck != null) 'проверено ${formatDateTime(state.lastUpdateCheck!)}',
             ].join(' · '),
             trailing: Wrap(spacing: 8, children: [
-              if (state.availableUpdates['app'] != null)
+              if (state.appUpdate != null)
                 state.downloadingAppUpdate
                     ? const SizedBox(
                         width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: C.orange))
@@ -248,33 +249,20 @@ class SettingsPage extends StatelessWidget {
               items: const {UpdateChannel.stable: 'Стабильный', UpdateChannel.beta: 'Бета'},
               onChanged: (v) {
                 s.updateChannel = v;
-                state.availableUpdates.remove('app');
+                state.appUpdate = null;
                 state.changed();
                 state.checkUpdates(silent: true);
               },
             ),
           ),
+          // Ядра вложены в программу и обновляются только вместе с ней — здесь лишь их версии.
           for (final core in CoreSpec.all)
             _Row(
               title: core.name,
-              subtitle: [
-                state.coreVersions[core.name] ?? 'не установлено',
-                if (state.availableUpdates[core.name] != null)
-                  'доступна ${state.availableUpdates[core.name]!.version}',
-              ].join(' · '),
-              trailing: state.availableUpdates[core.name] != null
-                  ? const Tag('обновление', color: C.orangeLight)
-                  : (state.coreVersions[core.name] != null
-                      ? Icon(Icons.check_circle_rounded, color: C.green, size: 20)
-                      : Icon(Icons.error_rounded, color: C.red, size: 20)),
-            ),
-          if (CoreSpec.all.any((c) => state.availableUpdates.containsKey(c.name)))
-            _Row(
-              title: 'Обновить ядра',
-              subtitle: state.isConnected ? 'VPN ненадолго отключится и включится снова' : 'Скачать и установить новые версии',
-              trailing: state.installingCores
-                  ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: C.orange))
-                  : GradientButton(label: 'Обновить', icon: Icons.download_rounded, onPressed: state.installCoreUpdates),
+              subtitle: state.coreVersions[core.name] ?? 'не найдено — переустановите SkipIt',
+              trailing: state.coreVersions[core.name] != null
+                  ? Icon(Icons.check_circle_rounded, color: C.green, size: 20)
+                  : Icon(Icons.error_rounded, color: C.red, size: 20),
             ),
         ]),
       ],
@@ -310,10 +298,13 @@ class _Section extends StatelessWidget {
 }
 
 class _Row extends StatelessWidget {
-  const _Row({required this.title, required this.subtitle, required this.trailing});
+  const _Row({required this.title, required this.subtitle, required this.trailing, this.subtitleColor});
   final String title;
   final String subtitle;
   final Widget trailing;
+
+  /// Цвет подписи, если на неё нужно обратить внимание (по умолчанию — приглушённый).
+  final Color? subtitleColor;
 
   @override
   Widget build(BuildContext context) => Padding(
@@ -323,7 +314,12 @@ class _Row extends StatelessWidget {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text(title, style: const TextStyle(fontWeight: FontWeight.w600)),
               const SizedBox(height: 2),
-              SelectableText(subtitle, style: TextStyle(color: C.muted, fontSize: 12)),
+              SelectableText(subtitle,
+                  style: TextStyle(
+                    color: subtitleColor ?? C.muted,
+                    fontSize: 12,
+                    fontWeight: subtitleColor != null ? FontWeight.w600 : null,
+                  )),
             ]),
           ),
           const SizedBox(width: 16),
@@ -349,45 +345,53 @@ class _CollapsibleSectionState extends State<_CollapsibleSection> {
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.fromLTRB(28, 0, 28, 18),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-          Panel(
-            onTap: () => setState(() => _open = !_open),
-            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-            child: Row(children: [
-              Expanded(
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Text(widget.title.toUpperCase(),
-                      style: const TextStyle(color: C.orange, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 1.6)),
-                  const SizedBox(height: 3),
-                  Text(widget.hint, style: TextStyle(color: C.muted, fontSize: 12)),
-                ]),
-              ),
-              AnimatedRotation(
-                turns: _open ? 0.5 : 0,
-                duration: const Duration(milliseconds: 200),
-                child: Icon(Icons.expand_more_rounded, color: C.muted),
-              ),
-            ]),
+        // Заголовок и содержимое — одна карточка: раскрытый список не «отрывается» от своего заголовка.
+        child: Container(
+          decoration: BoxDecoration(
+            color: C.surface,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: C.border),
           ),
-          AnimatedSize(
-            duration: const Duration(milliseconds: 220),
-            curve: Curves.easeOutCubic,
-            alignment: Alignment.topCenter,
-            child: _open
-                ? Padding(
-                    padding: const EdgeInsets.only(top: 10),
-                    child: Panel(
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 4),
-                      child: Column(children: [
-                        for (var i = 0; i < widget.children.length; i++) ...[
-                          if (i > 0) const Divider(height: 1),
-                          widget.children[i],
-                        ],
+          clipBehavior: Clip.antiAlias,
+          child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            Hover(
+              builder: (context, hovered) => GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => _open = !_open),
+                child: Container(
+                  color: hovered ? C.hover : Colors.transparent,
+                  padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+                  child: Row(children: [
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Text(widget.title.toUpperCase(),
+                            style: const TextStyle(
+                                color: C.orange, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 1.6)),
+                        const SizedBox(height: 3),
+                        Text(widget.hint, style: TextStyle(color: C.muted, fontSize: 12)),
                       ]),
                     ),
-                  )
-                : const SizedBox(width: double.infinity),
-          ),
-        ]),
+                    AnimatedRotation(
+                      turns: _open ? 0.5 : 0,
+                      duration: const Duration(milliseconds: 260),
+                      curve: Curves.easeOutCubic,
+                      child: Icon(Icons.expand_more_rounded, color: hovered ? C.orange : C.muted),
+                    ),
+                  ]),
+                ),
+              ),
+            ),
+            Reveal(
+              open: _open,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18),
+                child: Column(children: [
+                  for (final child in widget.children) ...[const Divider(height: 1), child],
+                  const SizedBox(height: 4),
+                ]),
+              ),
+            ),
+          ]),
+        ),
       );
 }

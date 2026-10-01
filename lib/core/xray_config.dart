@@ -40,6 +40,20 @@ class XrayConfig {
     return text.contains('geosite:') || text.contains('geoip:') || text.contains('ext:');
   }
 
+  /// Убирает параметры, с которыми свежий Xray отказывается запускаться. Сейчас это `allowInsecure`:
+  /// в Xray 26 он удалён (вместо него pinnedPeerCertSha256 / verifyPeerCertByName), а конфиги
+  /// провайдеров и старые сохранённые серверы всё ещё могут его содержать.
+  static T dropRemovedOptions<T>(T node) {
+    if (node is Map) {
+      final tls = node['tlsSettings'];
+      if (tls is Map) tls.remove('allowInsecure');
+      node.values.forEach(dropRemovedOptions);
+    } else if (node is List) {
+      node.forEach(dropRemovedOptions);
+    }
+    return node;
+  }
+
   /// Конфиг провайдера используется целиком; подменяются только локальные входы (наши порты),
   /// журнал и статистика — чтобы работали счётчики трафика и настройки портов.
   static Map<String, dynamic> buildFromProvider(Map<String, dynamic> provider, AppSettings settings) {
@@ -92,7 +106,7 @@ class XrayConfig {
     cfg['policy'] = policy;
     // Метаданные клиента Xray не нужны.
     cfg.remove('remarks');
-    return cfg;
+    return dropRemovedOptions(cfg);
   }
 
   /// Краткое содержание правил провайдера для экрана «Маршрутизация».
@@ -140,7 +154,7 @@ class XrayConfig {
     };
     final verbose = settings.logLevel == 'debug' || settings.logLevel == 'info';
 
-    final proxy = deepCopyMap(server.outbound)..['tag'] = 'proxy';
+    final proxy = dropRemovedOptions(deepCopyMap(server.outbound))..['tag'] = 'proxy';
 
     final directDomains = normalizeDomains(routing.directSites);
     final domesticDns = routing.domesticDnsAddress;
@@ -206,7 +220,10 @@ class XrayConfig {
         {
           'tag': 'direct',
           'protocol': 'freedom',
-          'settings': {'domainStrategy': settings.ipv6 ? 'UseIP' : 'UseIPv4'},
+          // В Xray 26 стратегия адресов переехала из settings в sockopt (старое место объявлено устаревшим).
+          'streamSettings': {
+            'sockopt': {'domainStrategy': settings.ipv6 ? 'UseIP' : 'UseIPv4'},
+          },
         },
         {'tag': 'block', 'protocol': 'blackhole'},
       ],
@@ -227,7 +244,7 @@ class XrayConfig {
         'port': basePort + i,
         'settings': <String, dynamic>{},
       });
-      outbounds.add(deepCopyMap(servers[i].outbound)..['tag'] = 'out$i');
+      outbounds.add(dropRemovedOptions(deepCopyMap(servers[i].outbound))..['tag'] = 'out$i');
       rules.add({
         'inboundTag': ['in$i'],
         'outboundTag': 'out$i',

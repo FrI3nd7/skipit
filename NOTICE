@@ -1,0 +1,13 @@
+SkipIt
+Copyright 2026 The SkipIt Authors
+
+This product is licensed under the Apache License, Version 2.0 (see the LICENSE file).
+Versions 1.0.0 and 1.0.1 were released under the MIT License.
+
+The name "SkipIt" and the SkipIt logo are not covered by the license: as stated in
+section 6 of the Apache License, it does not grant permission to use the trade names,
+trademarks, service marks, or product names of the Licensor. Modified versions must be
+distributed under a different name and logo.
+
+SkipIt bundles unmodified third-party programs with their own licenses
+(Xray-core, sing-box) and is built with Flutter. See THIRD_PARTY_NOTICES.md.

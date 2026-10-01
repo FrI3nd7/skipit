@@ -1,5 +1,6 @@
 import '../core/util.dart';
 import '../core/windows.dart';
+import '../version.dart';
 
 enum ConnectionMode {
   /// Виртуальный адаптер (sing-box TUN): весь трафик системы, нужны права администратора.
@@ -14,6 +15,16 @@ enum ConnectionMode {
 
   /// Только локальные SOCKS/HTTP-порты, система не трогается.
   proxyOnly,
+}
+
+extension ConnectionModeLabel on ConnectionMode {
+  /// Название режима, как на главной.
+  String get label => switch (this) {
+        ConnectionMode.mixed => 'Смешанный',
+        ConnectionMode.tun => 'TUN',
+        ConnectionMode.systemProxy => 'Прокси',
+        ConnectionMode.proxyOnly => 'Только порты',
+      };
 }
 
 enum PingType { tcp, realDelay }
@@ -35,10 +46,15 @@ class AppSettings {
   bool autoSelect = false;
   bool autoReconnect = true;
   bool connectOnStart = false;
+
+  /// При запуске просить права администратора (нужны для TUN и «Смешанного» режима).
+  bool runAsAdmin = true;
   String testUrl = 'https://www.gstatic.com/generate_204';
   PingType pingType = PingType.realDelay;
   String logLevel = 'warning';
-  String userAgent = 'SkipIt/1.0';
+  /// User-Agent по умолчанию несёт версию программы: провайдер видит, каким SkipIt пользуется клиент.
+  static const defaultUserAgent = 'SkipIt/$appVersion';
+  String userAgent = defaultUserAgent;
   bool sendHwid = true;
   String hwid = newId();
   bool updateSubsOnStart = true;
@@ -72,6 +88,7 @@ class AppSettings {
         'autoSelect': autoSelect,
         'autoReconnect': autoReconnect,
         'connectOnStart': connectOnStart,
+        'runAsAdmin': runAsAdmin,
         'testUrl': testUrl,
         'pingType': pingType.name,
         'logLevel': logLevel,
@@ -108,10 +125,14 @@ class AppSettings {
     s.autoSelect = parseBool(j['autoSelect'], s.autoSelect);
     s.autoReconnect = parseBool(j['autoReconnect'], s.autoReconnect);
     s.connectOnStart = parseBool(j['connectOnStart'], s.connectOnStart);
+    s.runAsAdmin = parseBool(j['runAsAdmin'], s.runAsAdmin);
     s.testUrl = j['testUrl'] as String? ?? s.testUrl;
     s.pingType = PingType.values.asNameMap()[j['pingType']] ?? s.pingType;
     s.logLevel = j['logLevel'] as String? ?? s.logLevel;
-    s.userAgent = j['userAgent'] as String? ?? s.userAgent;
+    // Сохранённое значение вида «SkipIt/<версия>» — это прежнее значение по умолчанию, а не выбор
+    // пользователя: после обновления программы версия в нём должна обновиться сама.
+    final ua = (j['userAgent'] as String? ?? '').trim();
+    s.userAgent = ua.isEmpty || RegExp(r'^SkipIt/[\w.]+$').hasMatch(ua) ? defaultUserAgent : ua;
     s.sendHwid = parseBool(j['sendHwid'], s.sendHwid);
     s.hwid = j['hwid'] as String? ?? s.hwid;
     s.updateSubsOnStart = parseBool(j['updateSubsOnStart'], s.updateSubsOnStart);

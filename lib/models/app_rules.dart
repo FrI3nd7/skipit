@@ -78,6 +78,12 @@ class AppRules {
   List<String> get enabledMatches =>
       entries.where((e) => e.enabled && e.match.isNotEmpty).map((e) => e.match).toSet().toList();
 
+  /// «Отпечаток» правил в том виде, как они действуют на трафик: режим и включённые программы.
+  /// По нему видно, отличаются ли правила в окне от тех, с которыми VPN сейчас подключён.
+  /// Выключенные и переименованные записи на него не влияют, а при режиме «Выключено» список не важен.
+  String get signature =>
+      mode == AppRoutingMode.off ? 'off' : '${mode.name}|${(enabledMatches.map((m) => m.toLowerCase()).toList()..sort()).join('|')}';
+
   List<String> matchesFor(AppAction action) => entries
       .where((e) => e.enabled && e.action == action && e.match.isNotEmpty)
       .map((e) => e.match)

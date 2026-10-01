@@ -6,12 +6,13 @@ import '../core/util.dart';
 import '../models/settings.dart';
 import '../state/app_scope.dart';
 import '../state/app_state.dart';
+import 'flag_text.dart';
 import 'servers_panel.dart';
 import 'shell.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
-/// Главная: слева кнопка подключения и режимы, справа список серверов (как в Happ).
+/// Главная: слева кнопка подключения и режимы, справа список серверов.
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -80,11 +81,14 @@ class _HomePageState extends State<HomePage> {
       const SizedBox(height: 22),
       Segmented<ConnectionMode>(
         value: state.settings.mode,
-        items: const {
-          ConnectionMode.mixed: 'Смешанный',
-          ConnectionMode.tun: 'TUN',
-          ConnectionMode.systemProxy: 'Прокси',
-          ConnectionMode.proxyOnly: 'Только порты',
+        items: {
+          for (final m in const [
+            ConnectionMode.mixed,
+            ConnectionMode.tun,
+            ConnectionMode.systemProxy,
+            ConnectionMode.proxyOnly,
+          ])
+            m: m.label,
         },
         onChanged: (m) => state.setMode(m),
       ),
@@ -116,6 +120,8 @@ class _HomePageState extends State<HomePage> {
           Expanded(child: _Speed(icon: Icons.arrow_downward_rounded, label: 'Загрузка', speed: state.stats.downSpeed, total: state.stats.down, active: connected)),
         ]),
       ),
+      const SizedBox(height: 10),
+      SizedBox(width: 360, child: _RoutingInfo(summary: state.routingSummary, onTap: () => state.openPage(AppState.routingPage))),
       if (state.lastError != null) ...[
         const SizedBox(height: 14),
         ConstrainedBox(constraints: const BoxConstraints(maxWidth: 360), child: _ErrorBox(state.lastError!)),
@@ -143,6 +149,53 @@ class _HomePageState extends State<HomePage> {
             ),
     );
   }
+}
+
+/// Какая маршрутизация сейчас действует; клик открывает раздел «Маршрутизация».
+class _RoutingInfo extends StatelessWidget {
+  const _RoutingInfo({required this.summary, required this.onTap});
+  final ({String sites, String? apps}) summary;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: 'Открыть маршрутизацию',
+        waitDuration: const Duration(milliseconds: 500),
+        child: Hover(
+          builder: (context, hovered) => GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 140),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              decoration: BoxDecoration(
+                color: hovered ? C.surface2 : C.surface,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: hovered ? C.orange.withValues(alpha: 0.5) : C.border),
+              ),
+              child: Row(children: [
+                Icon(Icons.alt_route_rounded, size: 18, color: hovered ? C.orange : C.muted),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Маршрутизация', style: TextStyle(color: C.muted, fontSize: 11)),
+                    FlagText(summary.sites,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+                    // Правила по программам — отдельной строкой, чтобы ничего не обрезалось.
+                    if (summary.apps != null) ...[
+                      const SizedBox(height: 2),
+                      Text(summary.apps!, style: TextStyle(color: C.muted, fontSize: 12)),
+                    ],
+                  ]),
+                ),
+                Icon(Icons.chevron_right_rounded, size: 18, color: hovered ? C.orange : C.muted),
+              ]),
+            ),
+          ),
+        ),
+      );
 }
 
 class _ErrorBox extends StatelessWidget {

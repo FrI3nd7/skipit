@@ -16,4 +16,8 @@ std::string Utf8FromUtf16(const wchar_t* utf16_string);
 // encoded in UTF-8. Returns an empty std::vector<std::string> on failure.
 std::vector<std::string> GetCommandLineArguments();
 
+// Тестовая сборка разработчика: рядом с exe лежит файл-метка `dev-build` (см. tools\dev.ps1).
+// У неё своё положение окна и своя подпись, чтобы не пересекаться с установленной программой.
+bool IsDevBuild();
+
 #endif  // RUNNER_UTILS_H_

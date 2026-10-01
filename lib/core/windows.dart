@@ -7,7 +7,7 @@ import 'paths.dart';
 const _internetSettingsKey =
     r'HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings';
 const _runKey = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Run';
-const _runValue = 'SkipIt';
+String get _runValue => AppPaths.appName;
 const urlScheme = 'skipit';
 
 /// Состояние системного прокси до подключения — чтобы вернуть как было.
@@ -126,6 +126,8 @@ class WinSys {
 
   /// Регистрирует `skipit://` — ссылки вида skipit://add/<url подписки> откроются в приложении.
   static Future<void> registerUrlScheme() async {
+    // Тестовая сборка ссылки на себя не переключает — они остаются за установленной программой.
+    if (AppPaths.isDev) return;
     final base = 'HKCU\\Software\\Classes\\$urlScheme';
     await _regSet(base, '', 'REG_SZ', 'URL:SkipIt');
     await _regSet(base, 'URL Protocol', 'REG_SZ', '');
@@ -232,23 +234,68 @@ class WinSys {
   }
   static Future<void> openUrl(String url) => Process.run('explorer', [url]);
 
-  /// Другие VPN, которые сейчас забирают весь трафик: виртуальный (не физический) адаптер, через
-  /// который идёт маршрут по умолчанию. Свой адаптер SkipIt не считается. При ошибке — пустой список:
-  /// проверка не должна мешать подключению.
-  static Future<List<String>> otherVpnAdapters() async {
-    const script = r"$phys = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | ForEach-Object { $_.ifIndex }); "
-        r"Get-NetRoute -DestinationPrefix '0.0.0.0/0','0.0.0.0/1','128.0.0.0/1' -ErrorAction SilentlyContinue | "
-        r"Where-Object { $phys -notcontains $_.ifIndex -and $_.InterfaceAlias -ne 'SkipIt' } | "
-        r"ForEach-Object { (Get-NetAdapter -InterfaceIndex $_.ifIndex -ErrorAction SilentlyContinue).InterfaceDescription } | "
-        r"Where-Object { $_ } | Sort-Object -Unique";
+  /// Сетевой адаптер, через который сейчас идёт трафик в интернет (лучший маршрут до 8.8.8.8).
+  /// Напрямую через WinAPI (GetBestInterface + GetIfEntry2) — мгновенно, без запуска PowerShell.
+  /// null — определить не удалось.
+  static ({String alias, String description, int type, bool hardware})? defaultRouteAdapter() {
     try {
-      final out = await _powershell(script);
-      if (out == null) return [];
-      return out.split(RegExp(r'\r?\n')).map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
+      final iphlp = DynamicLibrary.open('iphlpapi.dll');
+      final k32 = DynamicLibrary.open('kernel32.dll');
+      final getHeap = k32.lookupFunction<Pointer<Void> Function(), Pointer<Void> Function()>('GetProcessHeap');
+      final heapAlloc = k32.lookupFunction<Pointer<Void> Function(Pointer<Void>, Uint32, IntPtr),
+          Pointer<Void> Function(Pointer<Void>, int, int)>('HeapAlloc');
+      final heapFree = k32.lookupFunction<Int32 Function(Pointer<Void>, Uint32, Pointer<Void>),
+          int Function(Pointer<Void>, int, Pointer<Void>)>('HeapFree');
+      final getBestInterface = iphlp.lookupFunction<Uint32 Function(Uint32, Pointer<Uint32>),
+          int Function(int, Pointer<Uint32>)>('GetBestInterface');
+      final getIfEntry2 =
+          iphlp.lookupFunction<Uint32 Function(Pointer<Uint8>), int Function(Pointer<Uint8>)>('GetIfEntry2');
+
+      // Раскладка MIB_IF_ROW2: индекс, имя (Alias), описание, тип и флаги адаптера.
+      const rowSize = 1352, offIndex = 8, offAlias = 28, offDescription = 542, offType = 1128, offFlags = 1152;
+      const nameChars = 257;
+      final heap = getHeap();
+      final index = heapAlloc(heap, 0x8, 4).cast<Uint32>();
+      final row = heapAlloc(heap, 0x8, rowSize).cast<Uint8>();
+      try {
+        if (getBestInterface(0x08080808, index) != 0) return null;
+        (row + offIndex).cast<Uint32>().value = index.value;
+        if (getIfEntry2(row) != 0) return null;
+        String text(int offset) {
+          final chars = (row + offset).cast<Uint16>().asTypedList(nameChars);
+          final end = chars.indexOf(0);
+          return String.fromCharCodes(end < 0 ? chars : chars.sublist(0, end));
+        }
+
+        return (
+          alias: text(offAlias),
+          description: text(offDescription),
+          type: (row + offType).cast<Uint32>().value,
+          hardware: (row + offFlags).value & 1 != 0,
+        );
+      } finally {
+        heapFree(heap, 0, index.cast());
+        heapFree(heap, 0, row.cast());
+      }
     } catch (_) {
-      return [];
+      return null;
     }
   }
+
+  /// Другой VPN, который сейчас забирает весь трафик: маршрут в интернет идёт через виртуальный
+  /// туннельный адаптер (Wintun, WireGuard, TAP, PPP). Свой адаптер не считается. При любой ошибке —
+  /// пустой список: проверка не должна мешать подключению.
+  static List<String> otherVpnAdapters() {
+    final a = defaultRouteAdapter();
+    if (a == null || a.hardware || a.alias == AppPaths.appName) return const [];
+    // Типы адаптеров: 23 — PPP, 53 — виртуальный (Wintun/WireGuard), 131 — туннель.
+    final tunnel = const {23, 53, 131}.contains(a.type) ||
+        RegExp(r'\b(tap|tun|vpn|wintun|wireguard|openvpn)\b', caseSensitive: false).hasMatch(a.description);
+    return tunnel ? [a.description.isNotEmpty ? a.description : a.alias] : const [];
+  }
+
+  /// Поднялся ли наш TUN-адаптер: трафик в интернет уже идёт через него.
+  static bool ownTunActive() => defaultRouteAdapter()?.alias == AppPaths.appName;
 
   static Future<void> killPid(int pid) async {
     await Process.run('taskkill', ['/F', '/T', '/PID', '$pid']);

@@ -2,67 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:flutter/foundation.dart';
-
+import 'log_store.dart';
 import 'paths.dart';
 import 'util.dart';
 
-class LogLine {
-  LogLine(this.source, this.text) : time = DateTime.now();
-  final DateTime time;
-  final String source;
-  final String text;
-}
-
-class LogBuffer extends ChangeNotifier {
-  static const max = 2000;
-  static const _fileLimit = 1024 * 1024;
-  final lines = <LogLine>[];
-  File? _file;
-
-  /// События приложения (не поток вывода ядер) дублируются в файл — для разбора проблем после перезапуска.
-  void attachFile(String path) {
-    try {
-      final f = File(path);
-      if (f.existsSync() && f.lengthSync() > _fileLimit) f.renameSync('$path.old');
-      _file = f;
-      _write('--- запуск ${DateTime.now().toIso8601String()} ---');
-    } catch (_) {}
-  }
-
-  void _write(String line) {
-    try {
-      _file?.writeAsStringSync('$line\n', mode: FileMode.append, flush: true);
-    } catch (_) {}
-  }
-
-  void add(String source, String text) {
-    final toFile = source != 'xray' && source != 'sing-box' && source != 'test';
-    for (final t in const LineSplitter().convert(text)) {
-      if (t.trim().isEmpty) continue;
-      final line = LogLine(source, t);
-      lines.add(line);
-      if (toFile) _write('${line.time.toIso8601String()} [$source] $t');
-    }
-    if (lines.length > max) lines.removeRange(0, lines.length - max);
-    notifyListeners();
-  }
-
-  void clear() {
-    lines.clear();
-    notifyListeners();
-  }
-
-  String tail(int n, {String? source}) => lines
-      .where((l) => source == null || l.source == source)
-      .toList()
-      .reversed
-      .take(n)
-      .toList()
-      .reversed
-      .map((l) => l.text)
-      .join('\n');
-}
+export 'log_store.dart';
 
 class CoreException implements Exception {
   CoreException(this.message);

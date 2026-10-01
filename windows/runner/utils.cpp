@@ -41,6 +41,21 @@ std::vector<std::string> GetCommandLineArguments() {
   return command_line_arguments;
 }
 
+bool IsDevBuild() {
+  static const bool dev = [] {
+    wchar_t path[MAX_PATH];
+    const DWORD n = ::GetModuleFileNameW(nullptr, path, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return false;
+    std::wstring marker(path, n);
+    const size_t slash = marker.find_last_of(L'\\');
+    if (slash == std::wstring::npos) return false;
+    marker.replace(slash + 1, std::wstring::npos, L"dev-build");
+    const DWORD attrs = ::GetFileAttributesW(marker.c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+  }();
+  return dev;
+}
+
 std::string Utf8FromUtf16(const wchar_t* utf16_string) {
   if (utf16_string == nullptr) {
     return std::string();

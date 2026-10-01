@@ -1,18 +1,22 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/util.dart';
 import '../core/windows.dart';
+import '../core/xray_config.dart';
 import '../models/server.dart';
 import '../models/subscription.dart';
 import '../state/app_scope.dart';
 import '../state/app_state.dart';
+import 'app_menu.dart';
 import 'flag_text.dart';
 import 'shell.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
-/// Список серверов на главной (как в Happ): поиск, группы подписок с информацией, строки серверов.
+/// Список серверов на главной: поиск, группы подписок с информацией, строки серверов.
 class ServersPanel extends StatefulWidget {
   const ServersPanel({super.key, this.scrollable = true});
 
@@ -25,12 +29,25 @@ class ServersPanel extends StatefulWidget {
 
 class _ServersPanelState extends State<ServersPanel> {
   String _query = '';
+  final _search = TextEditingController();
 
-  bool _match(ServerProfile s) =>
-      _query.isEmpty ||
-      s.name.toLowerCase().contains(_query) ||
-      s.address.toLowerCase().contains(_query) ||
-      s.protocolLabel.toLowerCase().contains(_query);
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  void _clearSearch() {
+    _search.clear();
+    setState(() => _query = '');
+  }
+  /// Поиск идёт по названию подписки (тогда показываются все её серверы) и по названию сервера.
+  /// По протоколу и адресу не ищем: «vless» иначе находил бы всё подряд.
+  List<ServerProfile> _filter(Subscription? sub, List<ServerProfile> servers) {
+    if (_query.isEmpty) return servers;
+    if (sub != null && Flags.toPlain(sub.displayName).toLowerCase().contains(_query)) return servers;
+    return servers.where((s) => Flags.toPlain(s.name).toLowerCase().contains(_query)).toList();
+  }
 
   Future<void> _add(BuildContext context) async {
     final text = await promptText(
@@ -48,15 +65,34 @@ class _ServersPanelState extends State<ServersPanel> {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
+    final hasAny = state.subscriptions.isNotEmpty || state.servers.isNotEmpty;
     final groups = <(Subscription?, List<ServerProfile>)>[
-      for (final sub in state.subscriptions) (sub, state.serversOf(sub.id).where(_match).toList()),
-      if (state.serversOf(null).isNotEmpty) (null, state.serversOf(null).where(_match).toList()),
-    ];
+      for (final sub in state.subscriptions) (sub, _filter(sub, state.serversOf(sub.id))),
+      if (state.serversOf(null).isNotEmpty) (null, _filter(null, state.serversOf(null))),
+      // При поиске группы без совпадений не показываем.
+    ].where((g) => _query.isEmpty || g.$2.isNotEmpty).toList();
 
     final header = Row(children: [
       Expanded(
         child: TextField(
-          decoration: const InputDecoration(prefixIcon: Icon(Icons.search_rounded), hintText: 'Поиск серверов'),
+          controller: _search,
+          decoration: InputDecoration(
+            prefixIcon: const Icon(Icons.search_rounded),
+            hintText: 'Поиск по названию сервера или подписки',
+            // Крестик появляется, когда в поле что-то введено, и очищает поиск одним кликом.
+            suffixIcon: _search.text.isEmpty
+                ? null
+                : Tooltip(
+                    message: 'Очистить',
+                    child: Hover(
+                      builder: (context, hovered) => GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: _clearSearch,
+                        child: Icon(Icons.close_rounded, size: 18, color: hovered ? C.orange : C.muted),
+                      ),
+                    ),
+                  ),
+          ),
           onChanged: (v) => setState(() => _query = v.trim().toLowerCase()),
         ),
       ),
@@ -69,11 +105,12 @@ class _ServersPanelState extends State<ServersPanel> {
       ),
       _MenuAction(
         tooltip: 'Ещё',
-        items: const {
-          'add': 'Добавить подписку',
-          'paste': 'Вставить из буфера (Ctrl+V)',
-          'update': 'Обновить все подписки',
-        },
+        items: const [
+          AppMenuItem('add', 'Добавить подписку', icon: Icons.add_rounded),
+          AppMenuItem('paste', 'Вставить из буфера', icon: Icons.content_paste_rounded, hint: 'Ctrl+V'),
+          AppMenuItem.divider(),
+          AppMenuItem('update', 'Обновить все подписки', icon: Icons.sync_rounded),
+        ],
         onSelected: (v) {
           switch (v) {
             case 'add':
@@ -90,8 +127,13 @@ class _ServersPanelState extends State<ServersPanel> {
     final children = <Widget>[
       header,
       const SizedBox(height: 14),
-      if (groups.isEmpty)
+      if (!hasAny)
         _EmptyState(onAdd: () => _add(context))
+      else if (groups.isEmpty)
+        Panel(
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+          child: Center(child: Text('По запросу «$_query» ничего не найдено', style: TextStyle(color: C.muted))),
+        )
       else
         for (final (sub, list) in groups)
           Padding(
@@ -164,7 +206,7 @@ class _IconAction extends StatelessWidget {
 class _MenuAction extends StatelessWidget {
   const _MenuAction({required this.tooltip, required this.items, required this.onSelected});
   final String tooltip;
-  final Map<String, String> items;
+  final List<AppMenuItem<String>> items;
   final ValueChanged<String> onSelected;
 
   @override
@@ -173,29 +215,13 @@ class _MenuAction extends StatelessWidget {
           tooltip: tooltip,
           icon: Icons.more_horiz_rounded,
           onTap: () async {
-            final v = await showMenuAt(btn, items);
+            final v = await showAppMenu(btn, items: items);
             if (v != null) onSelected(v);
           },
         ),
       );
 }
 
-/// Меню под виджетом (или у курсора, если передана позиция).
-Future<String?> showMenuAt(BuildContext context, Map<String, String> items, {Offset? at, Set<String> danger = const {}}) {
-  final box = context.findRenderObject() as RenderBox;
-  final pos = at ?? box.localToGlobal(Offset(0, box.size.height + 4));
-  return showMenu<String>(
-    context: context,
-    position: RelativeRect.fromLTRB(pos.dx, pos.dy, pos.dx + 1, pos.dy + 1),
-    items: [
-      for (final e in items.entries)
-        PopupMenuItem(
-          value: e.key,
-          child: Text(e.value, style: danger.contains(e.key) ? TextStyle(color: C.red) : null),
-        ),
-    ],
-  );
-}
 
 class _GroupCard extends StatefulWidget {
   const _GroupCard({super.key, required this.subscription, required this.servers});
@@ -284,7 +310,8 @@ class _GroupCardState extends State<_GroupCard> {
               child: Row(children: [
                 AnimatedRotation(
                   turns: expanded ? 0 : -0.25,
-                  duration: const Duration(milliseconds: 180),
+                  duration: const Duration(milliseconds: 260),
+                  curve: Curves.easeOutCubic,
                   child: Icon(Icons.expand_more_rounded, color: C.muted),
                 ),
                 const SizedBox(width: 6),
@@ -311,33 +338,31 @@ class _GroupCardState extends State<_GroupCard> {
                   busy: state.pinging,
                   onTap: () => state.ping(widget.servers),
                 ),
-                _MenuAction(
-                  tooltip: 'Ещё',
-                  items: {
-                    'best': 'Выбрать самый быстрый',
-                    if (sub != null) ...{
-                      'edit': 'Изменить',
-                      'copy': 'Скопировать ссылку',
-                      'delete': 'Удалить подписку',
+                // У серверов, добавленных вручную, действий над группой нет — меню только у подписок.
+                if (sub != null)
+                  _MenuAction(
+                    tooltip: 'Ещё',
+                    items: const [
+                      AppMenuItem('edit', 'Изменить', icon: Icons.edit_rounded),
+                      AppMenuItem('copy', 'Скопировать ссылку', icon: Icons.link_rounded),
+                      AppMenuItem.divider(),
+                      AppMenuItem('delete', 'Удалить подписку', icon: Icons.delete_outline_rounded, danger: true),
+                    ],
+                    onSelected: (v) async {
+                      switch (v) {
+                        case 'edit':
+                          await _edit(state, sub);
+                        case 'copy':
+                          await Clipboard.setData(ClipboardData(text: sub.url));
+                          state.toast('Ссылка скопирована');
+                        case 'delete':
+                          if (context.mounted &&
+                              await confirm(context, 'Удалить подписку?', 'Все её серверы тоже будут удалены.')) {
+                            state.deleteSubscription(sub);
+                          }
+                      }
                     },
-                  },
-                  onSelected: (v) async {
-                    switch (v) {
-                      case 'best':
-                        await state.selectBest(widget.servers);
-                      case 'edit':
-                        await _edit(state, sub!);
-                      case 'copy':
-                        await Clipboard.setData(ClipboardData(text: sub!.url));
-                        state.toast('Ссылка скопирована');
-                      case 'delete':
-                        if (context.mounted &&
-                            await confirm(context, 'Удалить подписку?', 'Все её серверы тоже будут удалены.')) {
-                          state.deleteSubscription(sub!);
-                        }
-                    }
-                  },
-                ),
+                  ),
               ]),
             ),
           ),
@@ -348,13 +373,9 @@ class _GroupCardState extends State<_GroupCard> {
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
             child: Text(sub!.error!, style: TextStyle(color: C.red, fontSize: 12)),
           ),
-        AnimatedSize(
-          duration: const Duration(milliseconds: 200),
-          curve: Curves.easeOutCubic,
-          alignment: Alignment.topCenter,
-          child: expanded
-              ? Column(children: [for (final s in widget.servers) _ServerRow(server: s)])
-              : const SizedBox(width: double.infinity),
+        Reveal(
+          open: expanded,
+          child: Column(children: [for (final s in widget.servers) _ServerRow(server: s)]),
         ),
       ]),
     );
@@ -431,29 +452,67 @@ class _ServerRow extends StatelessWidget {
   const _ServerRow({required this.server});
   final ServerProfile server;
 
-  Future<void> _menu(BuildContext context, AppState state, Offset at) async {
-    final v = await showMenuAt(context, {
-      'ping': 'Проверить задержку',
-      'copy': 'Скопировать ссылку',
-      'rename': 'Переименовать',
-      if (server.subscriptionId == null) 'delete': 'Удалить',
-    }, at: at, danger: {'delete'});
+  Future<void> _menu(BuildContext context, AppState state, Offset? at) async {
+    final v = await showAppMenu<String>(context, at: at, items: [
+      const AppMenuItem('ping', 'Проверить задержку', icon: Icons.speed_rounded),
+      const AppMenuItem('json', 'Показать JSON', icon: Icons.data_object_rounded),
+      if (server.subscriptionId == null) ...const [
+        AppMenuItem.divider(),
+        AppMenuItem('delete', 'Удалить', icon: Icons.delete_outline_rounded, danger: true),
+      ],
+    ]);
     if (!context.mounted) return;
     switch (v) {
       case 'ping':
         await state.ping([server]);
-      case 'copy':
-        await Clipboard.setData(ClipboardData(text: server.link));
-        state.toast('Ссылка скопирована');
-      case 'rename':
-        final name = await promptText(context, title: 'Название', initial: server.name);
-        if (name != null && name.trim().isNotEmpty) {
-          server.name = name.trim();
-          state.changed();
-        }
+      case 'json':
+        await _showJson(context, state);
       case 'delete':
         state.deleteServer(server);
     }
+  }
+
+  /// Конфиг Xray, с которым программа подключается к этому серверу (с текущими настройками и маршрутизацией).
+  Future<void> _showJson(BuildContext context, AppState state) async {
+    final String json;
+    try {
+      json = const JsonEncoder.withIndent('  ')
+          .convert(XrayConfig.build(server: server, routing: state.selectedRouting, settings: state.settings));
+    } catch (e) {
+      state.toast('Не удалось собрать конфиг: $e');
+      return;
+    }
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: FlagText(server.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+        content: Container(
+          width: 760,
+          height: 520,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: C.surface2,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: C.border),
+          ),
+          child: SingleChildScrollView(
+            child: SelectableText(json,
+                style: TextStyle(fontFamily: 'Consolas', fontSize: 12.5, height: 1.45, color: C.text)),
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Закрыть')),
+          GradientButton(
+            label: 'Скопировать',
+            icon: Icons.copy_rounded,
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: json));
+              state.toast('JSON скопирован');
+            },
+          ),
+        ],
+      ),
+    );
   }
 
   @override
@@ -512,10 +571,7 @@ class _ServerRow extends StatelessWidget {
                 child: IconButton(
                   tooltip: 'Действия',
                   icon: Icon(Icons.more_vert_rounded, size: 18, color: C.muted),
-                  onPressed: () {
-                    final box = btn.findRenderObject() as RenderBox;
-                    _menu(btn, state, box.localToGlobal(Offset(0, box.size.height)));
-                  },
+                  onPressed: () => _menu(btn, state, null),
                 ),
               ),
             ),

@@ -23,7 +23,9 @@ const _provider = '''
      "streamSettings": {"network": "raw", "security": "reality", "realitySettings": {"serverName": "yahoo.com",
       "fingerprint": "chrome", "publicKey": "Z84J2IelR9ch3k8VtlVhhs5ycBUlXA7wHBWcBrjqnAw", "shortId": "6ba8"}}},
     {"tag": "proxy-2", "protocol": "vless", "settings": {"vnext": [{"address": "de2.example.com", "port": 443,
-      "users": [{"id": "b831381d-6324-4d53-ad4f-8cda48b30811", "encryption": "none"}]}]}},
+      "users": [{"id": "b831381d-6324-4d53-ad4f-8cda48b30811", "encryption": "none"}]}]},
+     "streamSettings": {"network": "xhttp", "security": "tls", "tlsSettings": {"serverName": "de2.example.com"},
+      "xhttpSettings": {"path": "/x", "mode": "auto"}}},
     {"tag": "block", "protocol": "blackhole"},
     {"tag": "direct", "protocol": "freedom"},
     {"tag": "dns-out", "protocol": "dns"}

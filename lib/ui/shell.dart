@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/link_parser.dart';
+import '../core/paths.dart';
 import '../core/tray.dart';
 import '../core/windows.dart';
 import '../state/app_scope.dart';
@@ -141,9 +142,10 @@ class _ShellState extends State<Shell> {
     super.dispose();
   }
 
-  int get _index => AppScope.read(context).pageIndex.clamp(0, _items.length - 1);
+  // Через of: раздел может открыть и другая часть окна (например, плитка маршрутизации на главной).
+  int get _index => AppScope.of(context).pageIndex.clamp(0, _items.length - 1);
 
-  void go(int i) => setState(() => AppScope.read(context).pageIndex = i);
+  void go(int i) => AppScope.read(context).openPage(i);
 
   @override
   Widget build(BuildContext context) {
@@ -271,12 +273,12 @@ class _Sidebar extends StatelessWidget {
                         child: AnimatedOpacity(
                           opacity: collapsed ? 0 : 1,
                           duration: const Duration(milliseconds: 200),
-                          child: const Padding(
-                            padding: EdgeInsets.only(left: 11),
-                            child: Text('SkipIt',
+                          child: Padding(
+                            padding: const EdgeInsets.only(left: 11),
+                            child: Text(AppPaths.appName,
                                 maxLines: 1,
                                 softWrap: false,
-                                style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900, letterSpacing: -0.3)),
+                                style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w900, letterSpacing: -0.3)),
                           ),
                         ),
                       ),
@@ -525,11 +527,11 @@ class _VersionRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
-    final hasUpdate = state.availableUpdates.isNotEmpty;
+    final hasUpdate = state.appUpdate != null;
     final tooltip = state.checkingUpdates
         ? 'Проверяю обновления…'
         : hasUpdate
-            ? 'Доступно обновление: ${state.availableUpdates.keys.map((k) => k == 'app' ? 'SkipIt' : k).join(', ')}'
+            ? 'Установить SkipIt ${state.appUpdate!.version}'
             : 'Проверить обновления';
 
     final button = Tooltip(
@@ -539,11 +541,9 @@ class _VersionRow extends StatelessWidget {
           // Есть обновление — кнопка сразу его ставит (с подтверждением), а не уводит в настройки.
           onTap: state.checkingUpdates
               ? null
-              : !hasUpdate
-                  ? state.checkUpdates
-                  : state.availableUpdates.containsKey('app')
-                      ? () => installAppUpdate(context)
-                      : state.installCoreUpdates,
+              : hasUpdate
+                  ? () => installAppUpdate(context)
+                  : state.checkUpdates,
           child: AnimatedContainer(
             duration: const Duration(milliseconds: 160),
             height: 28,
@@ -570,16 +570,16 @@ class _VersionRow extends StatelessWidget {
       ),
     );
 
-    final version = Text(wide ? 'v$appVersion' : appVersion,
+    final version = Text(wide ? 'v$appVersion${AppPaths.isDev ? ' dev' : ''}' : appVersion,
         maxLines: 1,
-        style: TextStyle(color: C.muted, fontSize: 10, fontWeight: FontWeight.w600, letterSpacing: 0.4));
+        style: TextStyle(color: C.muted, fontSize: wide ? 12.5 : 11, fontWeight: FontWeight.w700, letterSpacing: 0.3));
 
     return wide
         ? Padding(
             padding: const EdgeInsets.only(left: 6),
             child: Row(children: [version, const Spacer(), button]),
           )
-        : Column(children: [button, const SizedBox(height: 4), version]);
+        : Column(children: [button, const SizedBox(height: 2), version]);
   }
 }
 class _PasteIntent extends Intent {
