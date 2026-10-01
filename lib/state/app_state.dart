@@ -587,6 +587,8 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> toggle({bool ignoreOtherVpn = false}) async {
+    // Повторное нажатие, пока идёт подключение, отменяет его.
+    if (status == ConnStatus.connecting) return cancelConnect();
     if (isBusy) return;
     isConnected ? await disconnect() : await connect(ignoreOtherVpn: ignoreOtherVpn);
   }
@@ -656,9 +658,28 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Пользователь отменил подключение, пока оно шло (см. [cancelConnect]).
+  bool _cancelConnect = false;
+
+  /// Отмена идущего подключения. Ядра останавливаются сразу — ожидания в [connect] на этом
+  /// заканчиваются, и он сам возвращает всё как было, без сообщения об ошибке.
+  Future<void> cancelConnect() async {
+    if (status != ConnStatus.connecting || _cancelConnect) return;
+    _cancelConnect = true;
+    log.add('app', 'Подключение отменено');
+    await _singbox.stop();
+    await _xray.stop();
+  }
+
+  /// Между шагами подключения: если его отменили, дальше не идём.
+  void _checkCancel() {
+    if (_cancelConnect) throw CoreException('Подключение отменено');
+  }
+
   /// [ignoreOtherVpn] — пользователь уже предупреждён о другом VPN и решил подключаться всё равно.
   Future<void> connect({bool ignoreOtherVpn = false}) async {
     if (isBusy || isConnected) return;
+    _cancelConnect = false;
     lastError = null;
     tunFailed = false;
     status = ConnStatus.connecting;
@@ -684,6 +705,7 @@ class AppState extends ChangeNotifier {
         final best = bestOf(group);
         if (best != null) settings.selectedServerId = best.id;
       }
+      _checkCancel();
       final server = selectedServer;
       if (server == null) throw CoreException('Сначала добавьте и выберите сервер');
 
@@ -696,6 +718,7 @@ class AppState extends ChangeNotifier {
         await _ensureGeoFiles(routing);
       }
 
+      _checkCancel();
       // Порты проверяются ДО запуска: иначе «порт открыт» мог бы означать чужую программу
       // (например, Happ на тех же 10808/10809), а не наш Xray.
       final session = AppSettings.fromJson(settings.toJson());
@@ -739,16 +762,19 @@ class AppState extends ChangeNotifier {
                   }),
         ]);
       await File(AppPaths.configFile).writeAsString(const JsonEncoder.withIndent('  ').convert(config));
+      _checkCancel();
       await _xray.start(AppPaths.xrayExe, ['run', '-c', AppPaths.configFile],
           env: {'XRAY_LOCATION_ASSET': AppPaths.geoDir.path});
       settings.lastXrayPid = _xray.pid;
       await saveNow();
 
       if (!await waitForPort(session.socksPort, alive: () => _xray.running)) {
+        _checkCancel();
         throw CoreException('Xray не запустился:\n${log.tail(8, source: 'xray')}');
       }
       // Ядро могло открыть порт и тут же упасть на следующей ошибке конфига — проверяем, что оно живо.
       await Future.delayed(const Duration(milliseconds: 250));
+      _checkCancel();
       if (!_xray.running) throw CoreException('Xray завершился сразу после запуска:\n${log.tail(8, source: 'xray')}');
 
       if (xrayTun) {
@@ -757,6 +783,7 @@ class AppState extends ChangeNotifier {
         while (_xray.running && !WinSys.ownTunActive() && DateTime.now().isBefore(deadline)) {
           await Future.delayed(const Duration(milliseconds: 100));
         }
+        _checkCancel();
         if (!_xray.running || (!ignoreOtherVpn && !WinSys.ownTunActive())) {
           tunFailed = true;
           throw CoreException(_tunFailure('xray'));
@@ -770,6 +797,7 @@ class AppState extends ChangeNotifier {
         final tun = SingboxConfig.build(settings: session, routing: routing, apps: appRules, serverDomains: domains);
         await File(AppPaths.tunConfigFile).writeAsString(const JsonEncoder.withIndent('  ').convert(tun));
         final logStart = log.lines.length;
+        _checkCancel();
         await _singbox.start(AppPaths.singboxExe, ['run', '-c', AppPaths.tunConfigFile]);
         settings.lastSingboxPid = _singbox.pid;
         // «Подключено» сообщаем, только когда трафик действительно пошёл через наш адаптер. Обычно это
@@ -782,11 +810,13 @@ class AppState extends ChangeNotifier {
         while (_singbox.running && !WinSys.ownTunActive() && !stuck() && DateTime.now().isBefore(deadline)) {
           await Future.delayed(const Duration(milliseconds: 100));
         }
+        _checkCancel();
         if (!_singbox.running || stuck() || (!ignoreOtherVpn && !WinSys.ownTunActive())) {
           tunFailed = true;
           throw CoreException(_tunFailure('sing-box'));
         }
       }
+      _checkCancel();
       if (settings.mode == ConnectionMode.systemProxy || settings.mode == ConnectionMode.mixed) {
         if (!settings.systemProxyActive) settings.previousProxy = await WinSys.readProxy();
         await WinSys.setProxy('127.0.0.1:${session.httpPort}');
@@ -805,13 +835,19 @@ class AppState extends ChangeNotifier {
       });
       notifyListeners();
     } catch (e) {
-      lastError = e.toString();
-      log.add('app', 'Ошибка подключения: $e');
+      // Отмена пользователем — не ошибка: просто возвращаем всё как было.
+      final cancelled = _cancelConnect;
+      if (cancelled) {
+        tunFailed = false;
+      } else {
+        lastError = e.toString();
+        log.add('app', 'Ошибка подключения: $e');
+      }
       await _teardown();
       log.endSession();
       status = ConnStatus.disconnected;
       notifyListeners();
-      if (e is NeedAdminException) rethrow;
+      if (e is NeedAdminException && !cancelled) rethrow;
     }
   }
 
@@ -856,6 +892,8 @@ class AppState extends ChangeNotifier {
 
   Future<void> disconnect({bool keepError = false}) async {
     if (status == ConnStatus.disconnected) return;
+    // Подключение ещё идёт — отменяем его; всё уберёт сам connect().
+    if (status == ConnStatus.connecting) return cancelConnect();
     status = ConnStatus.disconnecting;
     notifyListeners();
     await _teardown();

@@ -73,7 +73,7 @@ class _HomePageState extends State<HomePage> {
       Text(
         connected && state.connectedAt != null
             ? formatDuration(DateTime.now().difference(state.connectedAt!))
-            : 'Нажмите, чтобы подключиться',
+            : (state.status == ConnStatus.connecting ? 'Нажмите, чтобы отменить' : 'Нажмите, чтобы подключиться'),
         style: TextStyle(
           color: connected ? (C.isDark ? C.orangeLight : C.orange) : C.muted,
           fontSize: connected ? 18 : 13,
