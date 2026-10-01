@@ -104,6 +104,8 @@ class _ServersPanelState extends State<ServersPanel> {
         tooltip: 'Проверить задержку (пинг) всех серверов',
         icon: Icons.speed_rounded,
         busy: state.pinging,
+        onCancel: state.cancelPing,
+        cancelTooltip: 'Остановить проверку задержки',
         onTap: () => state.ping(state.servers),
       ),
       _MenuAction(
@@ -173,19 +175,33 @@ class _EmptyState extends StatelessWidget {
 
 /// Маленькая круглая кнопка-иконка с подсветкой при наведении.
 class _IconAction extends StatelessWidget {
-  const _IconAction({required this.tooltip, required this.icon, required this.onTap, this.busy = false});
+  const _IconAction({
+    required this.tooltip,
+    required this.icon,
+    required this.onTap,
+    this.busy = false,
+    this.onCancel,
+    this.cancelTooltip,
+  });
   final String tooltip;
   final IconData icon;
   final VoidCallback? onTap;
   final bool busy;
 
+  /// Если задано — нажатие во время работы останавливает её (подсказка тогда [cancelTooltip]).
+  final VoidCallback? onCancel;
+  final String? cancelTooltip;
+
   @override
   Widget build(BuildContext context) => Tooltip(
-        message: tooltip,
+        message: busy && onCancel != null ? (cancelTooltip ?? tooltip) : tooltip,
         child: Hover(
-          enabled: !busy && onTap != null,
+          enabled: busy ? onCancel != null : onTap != null,
           builder: (context, hovered) => GestureDetector(
-            onTap: busy ? null : onTap,
+            // Занятая кнопка всё равно забирает нажатие: иначе оно проваливалось в заголовок
+            // подписки и сворачивало список серверов.
+            behavior: HitTestBehavior.opaque,
+            onTap: busy ? (onCancel ?? () {}) : onTap,
             child: AnimatedContainer(
               duration: const Duration(milliseconds: 140),
               width: 36,
@@ -355,6 +371,8 @@ class _GroupCardState extends State<_GroupCard> {
                       : 'Проверить задержку (пинг) серверов этого списка',
                   icon: Icons.speed_rounded,
                   busy: state.pinging,
+                  onCancel: state.cancelPing,
+                  cancelTooltip: 'Остановить проверку задержки',
                   onTap: () => state.ping(widget.servers),
                 ),
                 // У серверов, добавленных вручную, действий над группой нет — меню только у подписок.

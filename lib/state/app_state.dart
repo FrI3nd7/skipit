@@ -515,9 +515,17 @@ class AppState extends ChangeNotifier {
   // Пинг
   // ---------------------------------------------------------------------------
 
+  PingCancel? _pingCancel;
+
+  /// Останавливает идущую проверку задержки (повторное нажатие на её кнопку).
+  Future<void> cancelPing() async => _pingCancel?.cancel();
+
   Future<void> ping(List<ServerProfile> list) async {
     if (pinging || list.isEmpty) return;
     pinging = true;
+    final cancel = _pingCancel = PingCancel();
+    // Прежние значения: если проверку остановят, у непроверенных серверов они вернутся.
+    final before = {for (final s in list) s: s.delayMs};
     for (final s in list) {
       s.delayMs = null;
     }
@@ -529,13 +537,19 @@ class AppState extends ChangeNotifier {
 
     try {
       if (settings.pingType == PingType.tcp) {
-        await Pinger.tcpAll(list, onResult);
+        await Pinger.tcpAll(list, onResult, cancel);
       } else {
-        await Pinger.realDelayAll(list, settings.testUrl, log, onResult);
+        await Pinger.realDelayAll(list, settings.testUrl, log, onResult, cancel);
       }
     } catch (e) {
-      toast('Ошибка проверки: $e');
+      if (!cancel.cancelled) toast('Ошибка проверки: $e');
     } finally {
+      if (cancel.cancelled) {
+        for (final s in list) {
+          s.delayMs ??= before[s];
+        }
+      }
+      _pingCancel = null;
       pinging = false;
       changed();
     }
@@ -667,6 +681,8 @@ class AppState extends ChangeNotifier {
     if (status != ConnStatus.connecting || _cancelConnect) return;
     _cancelConnect = true;
     log.add('app', 'Подключение отменено');
+    // Автовыбор сервера мог ещё мерить задержку — останавливаем и его.
+    await cancelPing();
     await _singbox.stop();
     await _xray.stop();
   }

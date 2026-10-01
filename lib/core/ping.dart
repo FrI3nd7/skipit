@@ -7,6 +7,20 @@ import 'core_manager.dart';
 import 'paths.dart';
 import 'xray_config.dart';
 
+/// Отмена идущей проверки задержки: проверка перестаёт брать новые серверы и останавливает тестовое ядро.
+class PingCancel {
+  bool cancelled = false;
+  final _onCancel = <Future<void> Function()>[];
+
+  Future<void> cancel() async {
+    if (cancelled) return;
+    cancelled = true;
+    for (final f in _onCancel) {
+      await f();
+    }
+  }
+}
+
 class Pinger {
   static const _basePort = 20800;
   static const _timeout = Duration(seconds: 6);
@@ -23,10 +37,10 @@ class Pinger {
     }
   }
 
-  static Future<void> _pool<T>(List<T> items, int concurrency, Future<void> Function(T) fn) async {
+  static Future<void> _pool<T>(List<T> items, int concurrency, Future<void> Function(T) fn, [PingCancel? cancel]) async {
     var index = 0;
     Future<void> worker() async {
-      while (index < items.length) {
+      while (index < items.length && !(cancel?.cancelled ?? false)) {
         final item = items[index++];
         await fn(item);
       }
@@ -35,8 +49,12 @@ class Pinger {
     await Future.wait(List.generate(concurrency, (_) => worker()));
   }
 
-  static Future<void> tcpAll(List<ServerProfile> servers, void Function(ServerProfile, int) onResult) =>
-      _pool(servers, 24, (s) async => onResult(s, s.isUdpOnly ? -1 : await tcp(s)));
+  static Future<void> tcpAll(List<ServerProfile> servers, void Function(ServerProfile, int) onResult,
+          [PingCancel? cancel]) =>
+      _pool(servers, 24, (s) async {
+        final ms = s.isUdpOnly ? -1 : await tcp(s);
+        if (!(cancel?.cancelled ?? false)) onResult(s, ms);
+      }, cancel);
 
   /// Реальная задержка: запрос testUrl через каждый сервер (отдельный процесс Xray на время теста).
   /// Ищет диапазон из [count] свободных локальных портов, чтобы не попасть в чужой процесс
@@ -65,8 +83,9 @@ class Pinger {
     List<ServerProfile> servers,
     String testUrl,
     LogBuffer log,
-    void Function(ServerProfile, int) onResult,
-  ) async {
+    void Function(ServerProfile, int) onResult, [
+    PingCancel? cancel,
+  ]) async {
     if (servers.isEmpty) return;
     void failAll(String why) {
       for (final s in servers) {
@@ -79,15 +98,19 @@ class Pinger {
     if (base == null) return failAll('Нет свободных портов для проверки задержки');
     await File(AppPaths.testConfigFile).writeAsString(jsonEncode(XrayConfig.buildTest(servers, base)));
     final proc = CoreProcess('test', log);
+    // Отмена останавливает тестовое ядро — запросы через него сразу обрываются.
+    cancel?._onCancel.add(proc.stop);
     try {
       await proc.start(AppPaths.xrayExe, ['run', '-c', AppPaths.testConfigFile]);
       final ok = await waitForPort(base, alive: () => proc.running);
+      if (cancel?.cancelled ?? false) return;
       if (!ok || !proc.running) return failAll('Xray не запустился для проверки задержки');
       final results = List<int>.filled(servers.length, -1);
       final indexed = List.generate(servers.length, (i) => i);
       await _pool(indexed, 12, (i) async {
         results[i] = await _httpDelay(base + i, testUrl);
-      });
+      }, cancel);
+      if (cancel?.cancelled ?? false) return;
       // Если тестовый Xray умер посреди проверки, ответы получены не от него — результатам не верим.
       if (!proc.running) return failAll('Тестовый Xray завершился во время проверки');
       for (var i = 0; i < servers.length; i++) {
