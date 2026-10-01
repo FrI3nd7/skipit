@@ -62,7 +62,7 @@ powershell -ExecutionPolicy Bypass -File tools\dev.ps1                       # �
 
 ## Где программа хранит данные
 
-`%APPDATA%\SkipIt`: `state.json` (подписки и настройки), `app.log` (журнал), сгенерированные
-конфиги ядер, geo-базы. Положение окна — в реестре `HKCU\Software\SkipIt`.
+`%APPDATA%\SkipIt`: `state.json` (подписки и настройки), папка `logs` (журнал: файл на каждое
+подключение, хранится 5 дней), сгенерированные конфиги ядер, geo-базы. Положение окна — в реестре `HKCU\Software\SkipIt`.
 
 Флаги стран — [flagcdn.com](https://flagcdn.com) (общественное достояние).

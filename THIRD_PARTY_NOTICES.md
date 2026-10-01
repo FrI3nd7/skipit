@@ -28,6 +28,13 @@ SkipIt запускает их как самостоятельные проце�
 
 - Движок и библиотеки интерфейса, встроенные в `SkipIt.exe` и `flutter_windows.dll`
 - Лицензия: **BSD 3-Clause** — https://github.com/flutter/flutter/blob/master/LICENSE
+- Вместе с Flutter в программу входит пакет `intl` (русские подписи встроенных элементов) —
+  **BSD 3-Clause**, Copyright 2013, the Dart project authors: https://github.com/dart-lang/i18n
+
+## Wintun
+
+- Драйвер виртуального сетевого адаптера, встроен в sing-box и используется в режиме TUN
+- Лицензия на готовые сборки — https://www.wintun.net (Copyright WireGuard LLC)
 
 ## Флаги стран
 

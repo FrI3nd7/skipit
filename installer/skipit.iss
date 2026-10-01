@@ -79,6 +79,8 @@ Root: HKCU; Subkey: "Software\SkipIt"; ValueType: none; Flags: uninsdeletekey
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\core"
+; Папка, куда программа скачивает установщик обновления.
+Type: filesandordirs; Name: "{app}\update"
 
 [Code]
 // Перед установкой и удалением просим запущенный SkipIt корректно выйти: он отключит VPN

@@ -20,11 +20,87 @@ import 'flag_text.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
-/// Подключение с запросом прав администратора для TUN.
+/// Что делать с другим VPN, найденным перед подключением.
+enum _ConflictChoice { cancel, close, proceed }
+
+/// Окно-предупреждение: какие VPN сейчас мешают и что с ними сделать.
+Future<_ConflictChoice> _askAboutConflicts(BuildContext context, List<VpnConflict> conflicts) async {
+  final canClose = conflicts.every((c) => c.canClose);
+  final choice = await showDialog<_ConflictChoice>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Row(children: [
+        Icon(Icons.warning_amber_rounded, color: C.isDark ? C.orangeLight : C.orange),
+        const SizedBox(width: 10),
+        const Expanded(child: Text('Сейчас работает другой VPN')),
+      ]),
+      content: SizedBox(
+        width: 460,
+        child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          for (final c in conflicts)
+            Container(
+              width: double.infinity,
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+              decoration: BoxDecoration(
+                color: C.surface2,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: C.border),
+              ),
+              child: Text(c.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+            ),
+          const SizedBox(height: 8),
+          Text(
+            canClose
+                ? 'Два VPN одновременно мешают друг другу: закрывается ядро SkipIt или пропадает интернет. '
+                    'SkipIt может сам закрыть другой VPN и подключиться.'
+                : 'Два VPN одновременно мешают друг другу: закрывается ядро SkipIt или пропадает интернет. '
+                    'Этот VPN SkipIt закрыть сам не может — отключите его вручную и подключитесь снова.',
+            style: TextStyle(color: C.muted, height: 1.4),
+          ),
+        ]),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, _ConflictChoice.cancel), child: const Text('Отмена')),
+        if (canClose)
+          GradientButton(
+            label: 'Закрыть и подключиться',
+            icon: Icons.power_settings_new_rounded,
+            onPressed: () => Navigator.pop(ctx, _ConflictChoice.close),
+          )
+        else
+          GhostButton(
+            label: 'Подключиться всё равно',
+            icon: Icons.bolt_rounded,
+            onPressed: () => Navigator.pop(ctx, _ConflictChoice.proceed),
+          ),
+      ],
+    ),
+  );
+  return choice ?? _ConflictChoice.cancel;
+}
+
+/// Подключение: сначала проверка на другие VPN (с вопросом пользователю), затем запрос прав
+/// администратора для TUN, если их нет.
 Future<void> connectOrToggle(BuildContext context) async {
   final state = AppScope.read(context);
+  var ignoreOtherVpn = false;
+  if (!state.isConnected && !state.isBusy) {
+    final conflicts = state.findVpnConflicts();
+    if (conflicts.isNotEmpty) {
+      switch (await _askAboutConflicts(context, conflicts)) {
+        case _ConflictChoice.cancel:
+          return;
+        case _ConflictChoice.close:
+          await state.closeVpnConflicts(conflicts);
+        case _ConflictChoice.proceed:
+          ignoreOtherVpn = true;
+      }
+      if (!context.mounted) return;
+    }
+  }
   try {
-    await state.toggle();
+    await state.toggle(ignoreOtherVpn: ignoreOtherVpn);
   } on NeedAdminException {
     if (!context.mounted) return;
     final ok = await confirm(
@@ -101,7 +177,9 @@ class _ShellState extends State<Shell> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      _state = AppScope.read(context)..addListener(_askPendingLinks);
+      _state = AppScope.read(context)
+        ..addListener(_askPendingLinks)
+        ..addListener(_connectIfRequested);
       _askPendingLinks();
     });
   }
@@ -135,10 +213,19 @@ class _ShellState extends State<Shell> {
     _askPendingLinks();
   }
 
+  /// Подключение попросили из трея, и для него нужен вопрос пользователю (найден другой VPN).
+  void _connectIfRequested() {
+    final state = _state;
+    if (state == null || !state.connectRequested || !mounted) return;
+    state.connectRequested = false;
+    connectOrToggle(context);
+  }
+
   @override
   void dispose() {
     _sub?.cancel();
     _state?.removeListener(_askPendingLinks);
+    _state?.removeListener(_connectIfRequested);
     super.dispose();
   }
 
@@ -555,7 +642,7 @@ class _VersionRow extends StatelessWidget {
             ),
             child: Row(mainAxisSize: MainAxisSize.min, children: [
               if (state.checkingUpdates)
-                const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: C.orange))
+                const Spinner(size: 16, icon: Icons.sync_rounded)
               else
                 Icon(hasUpdate ? Icons.download_rounded : Icons.sync_rounded,
                     size: 16, color: hasUpdate || hovered ? C.orange : C.muted),

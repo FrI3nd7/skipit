@@ -5,6 +5,7 @@ import 'dart:ui' show AppExitResponse;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
 
 import 'core/paths.dart';
 import 'core/tray.dart';
@@ -16,8 +17,21 @@ import 'ui/flag_text.dart';
 import 'ui/shell.dart';
 import 'ui/theme.dart';
 
+/// Режимы в меню значка — в том же порядке, что на главной.
+const trayModes = [ConnectionMode.mixed, ConnectionMode.tun, ConnectionMode.systemProxy, ConnectionMode.proxyOnly];
+
+/// Серверы, показанные в меню значка (id по порядку): меню сообщает номер выбранного пункта.
+var trayServers = <String>[];
+
 // У тестовой сборки свой порт: она запускается рядом с установленной программой и не передаёт ей ссылки.
 final _instancePort = AppPaths.isDev ? 47814 : 47813;
+
+/// Защита от подмены аргументов через ссылку. Windows запускает программу как `SkipIt.exe "%1"`,
+/// и ссылка с кавычкой внутри (`skipit://x" --quit "`) могла бы добавить свои ключи — например,
+/// закрыть программу и оборвать VPN или запустить подключение. Поэтому запуск со ссылкой
+/// считается только запуском по ссылке: всё, что не похоже на ссылку, отбрасывается.
+List<String> sanitizeArgs(List<String> args) =>
+    args.any((a) => a.contains('://')) ? [for (final a in args) if (a.contains('://')) a] : args;
 
 /// Второй запуск (например, по ссылке skipit://…) передаёт аргументы первому и выходит.
 Future<ServerSocket?> _acquireSingleInstance(List<String> args) async {
@@ -55,8 +69,9 @@ Future<ServerSocket?> _acquireSingleInstance(List<String> args) async {
   }
 }
 
-Future<void> main(List<String> args) async {
+Future<void> main(List<String> rawArgs) async {
   WidgetsFlutterBinding.ensureInitialized();
+  final args = sanitizeArgs(rawArgs);
   var server = await _acquireSingleInstance(args);
   await AppPaths.init();
 
@@ -74,21 +89,34 @@ Future<void> main(List<String> args) async {
   }
   server?.listen((socket) async {
     try {
-      final text = await utf8.decoder.bind(socket).join();
-      final forwarded = (jsonDecode(text) as List).map((e) => e.toString()).toList();
+      // Порт слушает только этот компьютер, но постучаться в него может любая программа и даже
+      // страница в браузере. Принимаем только то, что прислала вторая копия SkipIt: короткий JSON-список.
+      final text = await utf8.decoder.bind(socket).take(64).join().timeout(const Duration(seconds: 3));
+      if (text.length > 16 * 1024) return;
+      final forwarded = sanitizeArgs((jsonDecode(text) as List).map((e) => e.toString()).toList());
       if (forwarded.contains('--quit')) {
         await state.shutdown();
         await Tray.quit();
         exit(0);
       }
       await state.handleArgs(forwarded);
-    } catch (_) {}
-    // Повторный запуск (ярлык, ссылка skipit://) — показываем окно, даже если оно в трее.
-    await Tray.show();
+      // Повторный запуск (ярлык, ссылка skipit://) — показываем окно, даже если оно в трее.
+      await Tray.show();
+    } catch (_) {
+      // Не наш формат — молча игнорируем (и окно не показываем).
+    } finally {
+      socket.destroy();
+    }
   });
 
   Tray.init(
     onToggle: () async {
+      // Найден другой подключённый VPN — показываем окно: там спросят, что с ним делать.
+      if (!state.isConnected && !state.isBusy && state.findVpnConflicts().isNotEmpty) {
+        await Tray.show();
+        state.requestConnect();
+        return;
+      }
       try {
         await state.toggle();
       } on NeedAdminException catch (e) {
@@ -100,9 +128,30 @@ Future<void> main(List<String> args) async {
       await state.shutdown();
       await Tray.quit();
     },
+    // Режим и сервер, выбранные в меню значка. Если VPN подключён, он переподключится сам.
+    onMode: (index) async {
+      if (index < 0 || index >= trayModes.length) return;
+      try {
+        await state.setMode(trayModes[index]);
+      } on NeedAdminException catch (e) {
+        await Tray.show();
+        state.toast('$e — нажмите кнопку подключения в окне');
+      }
+    },
+    onServer: (index) async {
+      if (index < 0 || index >= trayServers.length) return;
+      try {
+        await state.selectServer(trayServers[index]);
+      } on NeedAdminException catch (e) {
+        await Tray.show();
+        state.toast('$e — нажмите кнопку подключения в окне');
+      }
+    },
   );
   // Подсказка и меню трея следят за состоянием подключения.
   var lastTray = '';
+  // Картинки флагов лежат рядом с программой — меню значка рисует их само, вне окна Flutter.
+  final flagsDir = '${File(Platform.resolvedExecutable).parent.path}\\data\\flutter_assets\\assets\\flags';
   void syncTray() {
     final name = state.selectedServer?.name;
     final server = name == null ? null : Flags.toPlain(name);
@@ -113,10 +162,40 @@ Future<void> main(List<String> args) async {
       ConnStatus.disconnected => 'Не подключено',
     };
     final tooltip = '${AppPaths.appName} — $status${server != null ? '\n$server' : ''}';
-    final key = '$tooltip|${state.isConnected}|${state.settings.closeToTray}';
+    // Тема берётся из настроек, а не из уже применённой палитры: этот обработчик срабатывает раньше,
+    // чем окно перекрасится.
+    final dark = switch (state.settings.theme) {
+      AppTheme.dark => true,
+      AppTheme.light => false,
+      AppTheme.system => WidgetsBinding.instance.platformDispatcher.platformBrightness != Brightness.light,
+    };
+    // Серверы для меню — в том же порядке, что на главной (не больше 60: меню прокручивается колесом).
+    final servers = state.servers.take(60).toList();
+    final key = '$tooltip|${state.status.name}|${state.settings.closeToTray}|$dark|${state.settings.mode.name}|'
+        '${state.settings.selectedServerId}|${servers.map((s) => '${s.id}:${s.name}').join(',')}';
     if (key == lastTray) return;
     lastTray = key;
-    Tray.update(tooltip: tooltip, connected: state.isConnected, closeToTray: state.settings.closeToTray);
+    trayServers = [for (final s in servers) s.id];
+    Tray.update(
+      tooltip: tooltip,
+      connected: state.isConnected,
+      closeToTray: state.settings.closeToTray,
+      status: status,
+      server: server ?? 'Сервер не выбран',
+      state: state.isConnected ? 2 : (state.isBusy ? 1 : 0),
+      dark: dark,
+      modes: [for (final m in trayModes) m == ConnectionMode.proxyOnly ? 'Порты' : m.label],
+      mode: trayModes.indexOf(state.settings.mode),
+      servers: [
+        for (final s in servers)
+          () {
+            final (country, rest) = Flags.leading(s.name);
+            final flag = country == null ? '' : '$flagsDir\\$country.png';
+            return {'name': Flags.toPlain(rest), 'flag': flag.isNotEmpty && File(flag).existsSync() ? flag : ''};
+          }(),
+      ],
+      selectedServer: servers.indexWhere((s) => s.id == state.settings.selectedServerId),
+    );
   }
 
   state.addListener(syncTray);
@@ -203,6 +282,10 @@ class _SkipItAppState extends State<SkipItApp> with WidgetsBindingObserver {
       child: MaterialApp(
         title: AppPaths.appName,
         debugShowCheckedModeBanner: false,
+        // Интерфейс на русском: встроенные подписи Flutter (меню полей ввода, подсказки кнопок) — тоже.
+        locale: const Locale('ru'),
+        supportedLocales: const [Locale('ru')],
+        localizationsDelegates: GlobalMaterialLocalizations.delegates,
         theme: buildTheme(),
         home: const Shell(),
       ),

@@ -11,6 +11,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Часть самого Flutter SDK: русские подписи встроенных элементов (меню «Копировать/Вставить»,
+  # подсказки кнопок). Плагином не является.
+  flutter_localizations:
+    sdk: flutter
 
 dev_dependencies:
   flutter_test:

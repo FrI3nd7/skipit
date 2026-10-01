@@ -120,6 +120,11 @@ class AppState extends ChangeNotifier {
     }
 
     await step('восстановление', _recoverAfterCrash);
+    // Установщик прошлого обновления больше не нужен.
+    await step('уборка обновлений', () async {
+      final dir = Directory('${File(AppPaths.exe).parent.path}\\update');
+      if (dir.existsSync()) await dir.delete(recursive: true);
+    });
     await step('ссылки skipit://', WinSys.registerUrlScheme);
     await step('автозапуск', () async => autostart = await WinSys.isAutostartEnabled());
     unawaited(step('версии ядер', detectCoreVersions));
@@ -239,6 +244,9 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Уборка своих зависших адаптеров, начатая при запуске (см. [_recoverAfterCrash]).
+  Future<void>? _tunCleanup;
+
   /// Если прошлый запуск упал — вернуть системный прокси и добить процессы ядра.
   Future<void> _recoverAfterCrash() async {
     // Ядра, оставшиеся от прошлого запуска (например, после принудительного закрытия), держат порты.
@@ -251,6 +259,9 @@ class AppState extends ChangeNotifier {
     }
     settings.lastXrayPid = settings.lastSingboxPid = null;
     await saveNow();
+    // Свои адаптеры, зависшие после сбоя (ядра уже остановлены выше). В фоне: запуск окна не ждёт,
+    // но подключение дождётся конца уборки — иначе она могла бы удалить только что созданный адаптер.
+    _tunCleanup = WinSys.removeOwnTunAdapters();
   }
 
   Future<void> shutdown() async {
@@ -538,9 +549,9 @@ class AppState extends ChangeNotifier {
     if (isConnected) await reconnect();
   }
 
-  Future<void> toggle() async {
+  Future<void> toggle({bool ignoreOtherVpn = false}) async {
     if (isBusy) return;
-    isConnected ? await disconnect() : await connect();
+    isConnected ? await disconnect() : await connect(ignoreOtherVpn: ignoreOtherVpn);
   }
 
   Future<void> reconnect() async {
@@ -588,9 +599,31 @@ class AppState extends ChangeNotifier {
     throw CoreException('Не нашлось свободного порта для $what');
   }
 
-  Future<void> connect() async {
+  /// Другие подключённые VPN, которые помешают (проверяется перед подключением).
+  /// В режиме «Только порты» система не меняется — там мешать нечему.
+  List<VpnConflict> findVpnConflicts() =>
+      settings.mode == ConnectionMode.proxyOnly ? const [] : WinSys.vpnConflicts();
+
+  /// Закрывает мешающие VPN по выбору пользователя.
+  Future<void> closeVpnConflicts(List<VpnConflict> conflicts) async {
+    log.add('app', 'Закрываю мешающие VPN: ${conflicts.map((c) => c.name).join(', ')}');
+    await WinSys.closeVpnConflicts(conflicts);
+  }
+
+  /// Подключение попросили не из окна (значок в трее), а нужен вопрос пользователю —
+  /// окно увидит этот флаг и само проведёт проверку с диалогом.
+  bool connectRequested = false;
+
+  void requestConnect() {
+    connectRequested = true;
+    notifyListeners();
+  }
+
+  /// [ignoreOtherVpn] — пользователь уже предупреждён о другом VPN и решил подключаться всё равно.
+  Future<void> connect({bool ignoreOtherVpn = false}) async {
     if (isBusy || isConnected) return;
     lastError = null;
+    tunFailed = false;
     status = ConnStatus.connecting;
     notifyListeners();
     // Каждое подключение — отдельный отрезок журнала (раздел «Логи»).
@@ -600,7 +633,7 @@ class AppState extends ChangeNotifier {
       if (usesTun && !isAdmin) throw NeedAdminException();
 
       // Два VPN с TUN одновременно дерутся за маршруты — сеть ломается до перезагрузки.
-      if (usesTun) {
+      if (usesTun && !ignoreOtherVpn) {
         final other = WinSys.otherVpnAdapters();
         if (other.isNotEmpty) {
           throw CoreException('Включён другой VPN (${other.join(', ')}). Отключите его и подключитесь снова — '
@@ -655,19 +688,26 @@ class AppState extends ChangeNotifier {
         final domains = <String>[
           if (InternetAddress.tryParse(server.address) == null && server.address.isNotEmpty) server.address,
         ];
-        final tun = SingboxConfig.build(settings: session, routing: routing, apps: appRules, serverDomains: domains);
         _appliedAppRules = appRules.signature;
+        await _tunCleanup;
+        final tun = SingboxConfig.build(settings: session, routing: routing, apps: appRules, serverDomains: domains);
         await File(AppPaths.tunConfigFile).writeAsString(const JsonEncoder.withIndent('  ').convert(tun));
+        final logStart = log.lines.length;
         await _singbox.start(AppPaths.singboxExe, ['run', '-c', AppPaths.tunConfigFile]);
         settings.lastSingboxPid = _singbox.pid;
-        // Ждём не фиксированное время, а пока трафик действительно не пойдёт через наш адаптер.
-        // Если за 3 секунды этого не видно, но sing-box жив — считаем, что он поднялся.
-        final deadline = DateTime.now().add(const Duration(seconds: 3));
-        while (_singbox.running && !WinSys.ownTunActive() && DateTime.now().isBefore(deadline)) {
+        // «Подключено» сообщаем, только когда трафик действительно пошёл через наш адаптер. Обычно это
+        // доли секунды. Если Windows не может включить адаптер, sing-box через 10 секунд пишет об этом
+        // предупреждение — дальше не ждём и сразу сообщаем об ошибке, а не держим человека минуту.
+        // (Если пользователь решил подключаться при чужом VPN, маршрут может остаться за тем VPN —
+        // тогда достаточно, что sing-box жив.)
+        final deadline = DateTime.now().add(Duration(seconds: ignoreOtherVpn ? 5 : 12));
+        bool stuck() => log.lines.skip(logStart).any((l) => l.source == 'sing-box' && _adapterTrouble(l.text));
+        while (_singbox.running && !WinSys.ownTunActive() && !stuck() && DateTime.now().isBefore(deadline)) {
           await Future.delayed(const Duration(milliseconds: 100));
         }
-        if (!_singbox.running) {
-          throw CoreException('Не удалось поднять TUN:\n${log.tail(8, source: 'sing-box')}');
+        if (!_singbox.running || stuck() || (!ignoreOtherVpn && !WinSys.ownTunActive())) {
+          tunFailed = true;
+          throw CoreException(_tunFailure());
         }
       }
       if (settings.mode == ConnectionMode.systemProxy || settings.mode == ConnectionMode.mixed) {
@@ -696,6 +736,38 @@ class AppState extends ChangeNotifier {
       notifyListeners();
       if (e is NeedAdminException) rethrow;
     }
+  }
+
+  /// sing-box сообщает, что Windows не отдаёт ему сетевой адаптер.
+  static bool _adapterTrouble(String line) {
+    final l = line.toLowerCase();
+    return l.contains('configure tun interface') || l.contains('open interface take too much time');
+  }
+
+  /// Последняя ошибка — не поднялся адаптер TUN: на главной предлагается режим «Прокси».
+  bool tunFailed = false;
+
+  /// Скрыть сообщение об ошибке на главной (крестик или истёкшее время показа).
+  void clearError() {
+    if (lastError == null) return;
+    lastError = null;
+    tunFailed = false;
+    notifyListeners();
+  }
+
+  /// Понятное объяснение, почему не поднялся TUN, по последним строкам sing-box.
+  String _tunFailure() {
+    final tail = log.tail(8, source: 'sing-box');
+    final lower = tail.toLowerCase();
+    if (_adapterTrouble(lower) || tail.trim().isEmpty) {
+      return 'Windows не смогла включить сетевой адаптер VPN — это сбой на стороне Windows, не настроек. '
+          'Обычно помогает перезагрузка компьютера. Прямо сейчас можно подключиться в режиме «Прокси»: '
+          'он работает без адаптера.';
+    }
+    if (lower.contains('access is denied')) {
+      return 'Windows не разрешила создать сетевой адаптер VPN — запустите SkipIt от имени администратора.';
+    }
+    return 'Не удалось поднять TUN:\n$tail';
   }
 
   Future<void> disconnect({bool keepError = false}) async {
@@ -842,7 +914,18 @@ class AppState extends ChangeNotifier {
     downloadingAppUpdate = true;
     notifyListeners();
     try {
-      final path = '${Directory.systemTemp.path}\\${release.installerName}';
+      // Программа обычно работает с правами администратора и запускает установщик с ними же. Поэтому
+      // качаем его не во временную папку пользователя (там файл успела бы подменить любая программа),
+      // а в папку рядом с программой: в Program Files писать могут только администраторы.
+      var dir = Directory.systemTemp;
+      if (isAdmin) {
+        try {
+          final own = Directory('${File(AppPaths.exe).parent.path}\\update');
+          await own.create(recursive: true);
+          dir = own;
+        } catch (_) {}
+      }
+      final path = '${dir.path}\\${release.installerName}';
       await Net.download(release.installerUrl, path, proxyPort: _updateProxy);
       // Запускаем только то, что совпало с контрольной суммой из релиза.
       final expected = await Updates.expectedSha256(release, proxyPort: _updateProxy);

@@ -128,7 +128,13 @@ class LinkParser {
     result.errors.add('Неизвестный диплинк: ${_short(line)}');
   }
 
-  static String _short(String s) => s.length > 60 ? '${s.substring(0, 60)}…' : s;
+  /// Кусок строки для сообщения об ошибке. У ссылок показываем только вид (`vless://…`):
+  /// дальше идут ключи доступа к серверу, им не место в сообщениях и журнале.
+  static String _short(String s) {
+    final scheme = RegExp(r'^[a-zA-Z][\w+.-]*://').firstMatch(s);
+    if (scheme != null) return '${scheme.group(0)}…';
+    return s.length > 60 ? '${s.substring(0, 60)}…' : s;
+  }
 
   // ---------------------------------------------------------------------------
   // JSON-конфиги Xray (Happ/Remnawave отдают массив полных конфигов)

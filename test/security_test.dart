@@ -5,6 +5,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:skipit/core/link_parser.dart';
 import 'package:skipit/core/singbox_config.dart';
 import 'package:skipit/core/updates.dart';
+import 'package:skipit/core/windows.dart';
+import 'package:skipit/main.dart' show sanitizeArgs;
+import 'package:skipit/models/subscription.dart';
 import 'package:skipit/core/xray_config.dart';
 import 'package:skipit/models/app_rules.dart';
 import 'package:skipit/models/routing.dart';
@@ -136,6 +139,38 @@ void main() {
     expect(LinkParser.parseLink('vless://$id@example.com:80?type=tcp&security=none#a')!.warning, isNotNull);
     expect(LinkParser.parseLink('vless://$id@192.168.1.10:80?type=tcp&security=none#a')!.warning, isNull);
     expect(LinkParser.parseLink('vless://$id@example.com:443?type=tcp&security=tls&sni=example.com#a')!.warning, isNull);
+  });
+
+  test('ссылка не может подсунуть программе свои ключи запуска', () {
+    // Windows запускает `SkipIt.exe "%1"`; ссылка с кавычкой даёт лишние аргументы.
+    expect(sanitizeArgs(['skipit://add/https://a.example/sub', '--quit']), ['skipit://add/https://a.example/sub']);
+    expect(sanitizeArgs(['--connect', 'skipit://x', '--elevated', '--autostart']), ['skipit://x']);
+    // Обычный запуск с ключами (автозапуск, установщик) не трогается.
+    expect(sanitizeArgs(['--autostart']), ['--autostart']);
+    expect(sanitizeArgs(['--quit']), ['--quit']);
+    expect(sanitizeArgs([]), isEmpty);
+  });
+
+  test('из данных провайдера открываются только веб-ссылки', () {
+    for (final ok in ['https://t.me/support', 'http://example.com/help', 'tg://resolve?domain=x']) {
+      expect(WinSys.isSafeUrl(ok), isTrue, reason: ok);
+    }
+    for (final bad in [
+      r'C:\Windows\System32\calc.exe',
+      r'\\evil.example\share\run.exe',
+      'file:///C:/Windows/System32/calc.exe',
+      'javascript:alert(1)',
+      'ms-settings:privacy',
+      'https://a.example/" & calc',
+      '',
+    ]) {
+      expect(WinSys.isSafeUrl(bad), isFalse, reason: bad);
+    }
+    final sub = Subscription(url: 'https://panel.example/sub')
+      ..applyMeta({'support-url': r'C:\Windows\System32\calc.exe', 'profile-web-page-url': 'https://panel.example'});
+    expect(sub.supportUrl, isNull);
+    expect(sub.webPageUrl, 'https://panel.example');
+    expect(Subscription.fromJson({'url': 'https://a.example', 'supportUrl': 'file:///C:/x.exe'}).supportUrl, isNull);
   });
 
   test('парсер не падает на мусоре из ссылки', () {

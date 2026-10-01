@@ -124,7 +124,20 @@ class _HomePageState extends State<HomePage> {
       SizedBox(width: 360, child: _RoutingInfo(summary: state.routingSummary, onTap: () => state.openPage(AppState.routingPage))),
       if (state.lastError != null) ...[
         const SizedBox(height: 14),
-        ConstrainedBox(constraints: const BoxConstraints(maxWidth: 360), child: _ErrorBox(state.lastError!)),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: _ErrorBox(
+            state.lastError!,
+            key: ValueKey(state.lastError),
+            onClose: state.clearError,
+            // Адаптер TUN не поднялся — предлагаем сразу подключиться в режиме, которому он не нужен.
+            actionLabel: state.tunFailed ? 'Подключиться в режиме «Прокси»' : null,
+            onAction: () async {
+              await state.setMode(ConnectionMode.systemProxy);
+              if (context.mounted) await connectOrToggle(context);
+            },
+          ),
+        ),
       ],
     ]);
 
@@ -152,13 +165,29 @@ class _HomePageState extends State<HomePage> {
 }
 
 /// Какая маршрутизация сейчас действует; клик открывает раздел «Маршрутизация».
-class _RoutingInfo extends StatelessWidget {
+class _RoutingInfo extends StatefulWidget {
   const _RoutingInfo({required this.summary, required this.onTap});
   final ({String sites, String? apps}) summary;
   final VoidCallback onTap;
 
   @override
-  Widget build(BuildContext context) => Tooltip(
+  State<_RoutingInfo> createState() => _RoutingInfoState();
+}
+
+class _RoutingInfoState extends State<_RoutingInfo> {
+  /// Последний текст про программы: пока строка плавно прячется, он ещё нужен на экране.
+  String _apps = '';
+
+  ({String sites, String? apps}) get summary => widget.summary;
+  VoidCallback get onTap => widget.onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    if (summary.apps != null) _apps = summary.apps!;
+    return _tile(context);
+  }
+
+  Widget _tile(BuildContext context) => Tooltip(
         message: 'Открыть маршрутизацию',
         waitDuration: const Duration(milliseconds: 500),
         child: Hover(
@@ -183,11 +212,18 @@ class _RoutingInfo extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
-                    // Правила по программам — отдельной строкой, чтобы ничего не обрезалось.
-                    if (summary.apps != null) ...[
-                      const SizedBox(height: 2),
-                      Text(summary.apps!, style: TextStyle(color: C.muted, fontSize: 12)),
-                    ],
+                    // Правила по программам — отдельной строкой; она плавно выезжает и прячется
+                    // при смене режима (в режимах без TUN эти правила не действуют).
+                    Reveal(
+                      open: summary.apps != null,
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(_apps, style: TextStyle(color: C.muted, fontSize: 12)),
+                        ),
+                      ),
+                    ),
                   ]),
                 ),
                 Icon(Icons.chevron_right_rounded, size: 18, color: hovered ? C.orange : C.muted),
@@ -198,23 +234,83 @@ class _RoutingInfo extends StatelessWidget {
       );
 }
 
-class _ErrorBox extends StatelessWidget {
-  const _ErrorBox(this.text);
+/// Сообщение об ошибке подключения. Закрывается крестиком и само исчезает через 10 секунд;
+/// пока на нём курсор (читают или выделяют текст) — не исчезает.
+class _ErrorBox extends StatefulWidget {
+  const _ErrorBox(this.text, {super.key, required this.onClose, this.actionLabel, this.onAction});
   final String text;
+  final VoidCallback onClose;
+
+  /// Кнопка быстрого выхода из ситуации под текстом ошибки (например, сменить режим).
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   @override
-  Widget build(BuildContext context) => Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          color: C.red.withValues(alpha: 0.08),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: C.red.withValues(alpha: 0.4)),
-        ),
-        child: SelectableText(text, style: TextStyle(color: C.red, fontSize: 13)),
-      );
+  State<_ErrorBox> createState() => _ErrorBoxState();
 }
 
+class _ErrorBoxState extends State<_ErrorBox> {
+  Timer? _timer;
+
+  void _arm() {
+    _timer?.cancel();
+    // С кнопкой действия сообщение живёт дольше: нужно успеть прочитать и решить.
+    _timer = Timer(Duration(seconds: widget.actionLabel != null ? 25 : 10), () {
+      if (mounted) widget.onClose();
+    });
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _arm();
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => MouseRegion(
+        onEnter: (_) => _timer?.cancel(),
+        onExit: (_) => _arm(),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
+          decoration: BoxDecoration(
+            color: C.red.withValues(alpha: 0.08),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: C.red.withValues(alpha: 0.4)),
+          ),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Expanded(
+              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                SelectableText(widget.text, style: TextStyle(color: C.red, fontSize: 13)),
+                if (widget.actionLabel != null) ...[
+                  const SizedBox(height: 10),
+                  GhostButton(label: widget.actionLabel!, icon: Icons.bolt_rounded, onPressed: widget.onAction),
+                ],
+              ]),
+            ),
+            Tooltip(
+              message: 'Закрыть',
+              child: Hover(
+                builder: (context, hovered) => GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onClose,
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(8, 0, 8, 8),
+                    child: Icon(Icons.close_rounded, size: 18, color: hovered ? C.text : C.red),
+                  ),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      );
+}
 class _Speed extends StatelessWidget {
   const _Speed({required this.icon, required this.label, required this.speed, required this.total, required this.active});
   final IconData icon;

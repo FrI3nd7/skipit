@@ -172,6 +172,113 @@ class AppDropdown<T> extends StatelessWidget {
         ),
       );
 }
+/// Индикатор «идёт работа»: плавно вращающийся значок. Стандартный кружок Flutter на маленьком
+/// размере рисуется с заметными «ступеньками», а значок — это символ шрифта, он всегда сглажен.
+class Spinner extends StatefulWidget {
+  const Spinner({super.key, this.size = 18, this.icon = Icons.autorenew_rounded, this.pulse = false});
+  final double size;
+  final IconData icon;
+
+  /// Вместо вращения значок плавно мигает. Для действий, у которых свой значок (проверка задержки):
+  /// вращающиеся стрелки там выглядели бы как обновление подписки.
+  final bool pulse;
+
+  @override
+  State<Spinner> createState() => _SpinnerState();
+}
+
+class _SpinnerState extends State<Spinner> with SingleTickerProviderStateMixin {
+  late final _anim = AnimationController(vsync: this, duration: Duration(milliseconds: widget.pulse ? 650 : 900))
+    ..repeat(reverse: widget.pulse);
+
+  @override
+  void dispose() {
+    _anim.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final icon = Icon(widget.icon, size: widget.size, color: C.orange);
+    return widget.pulse
+        ? FadeTransition(opacity: Tween(begin: 0.3, end: 1.0).animate(_anim), child: icon)
+        : RotationTransition(turns: _anim, child: icon);
+  }
+}
+
+/// Мягкие края у прокручиваемого списка: строки не обрезаются резкой линией сверху и снизу,
+/// а плавно растворяются на последних пикселях.
+class FadeEdges extends StatelessWidget {
+  const FadeEdges({super.key, required this.child, this.size = 14});
+  final Widget child;
+
+  /// Высота растворяющейся полосы у каждого края.
+  final double size;
+
+  @override
+  Widget build(BuildContext context) => ShaderMask(
+        blendMode: BlendMode.dstIn,
+        shaderCallback: (rect) {
+          final edge = rect.height <= 0 ? 0.0 : (size / rect.height).clamp(0.0, 0.5);
+          return LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: const [Colors.transparent, Colors.black, Colors.black, Colors.transparent],
+            stops: [0, edge, 1 - edge, 1],
+          ).createShader(rect);
+        },
+        child: child,
+      );
+}
+
+/// Выключатель. Переключается только кликом: стандартный Switch реагирует ещё и на протягивание
+/// мышью, из-за чего настройки можно было случайно переключить, проведя по ним с зажатой кнопкой.
+class AppSwitch extends StatelessWidget {
+  const AppSwitch({super.key, required this.value, required this.onChanged});
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  static const _duration = Duration(milliseconds: 180);
+
+  @override
+  Widget build(BuildContext context) => Hover(
+        builder: (context, hovered) => GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => onChanged(!value),
+          child: AnimatedContainer(
+            duration: _duration,
+            curve: Curves.easeOutCubic,
+            width: 50,
+            height: 30,
+            padding: const EdgeInsets.all(3),
+            decoration: BoxDecoration(
+              color: value ? C.orange : C.surface2,
+              borderRadius: BorderRadius.circular(15),
+              border: Border.all(
+                color: value ? C.orange : (hovered ? C.orange.withValues(alpha: 0.6) : C.border),
+                width: 1.5,
+              ),
+              boxShadow: [if (value && hovered) BoxShadow(color: C.orange.withValues(alpha: 0.45), blurRadius: 12)],
+            ),
+            // Кружок переезжает к нужному краю и подрастает во включённом состоянии.
+            child: AnimatedAlign(
+              duration: _duration,
+              curve: Curves.easeOutCubic,
+              alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+              child: AnimatedContainer(
+                duration: _duration,
+                curve: Curves.easeOutCubic,
+                width: value ? 21 : 15,
+                height: value ? 21 : 15,
+                margin: EdgeInsets.symmetric(horizontal: value ? 0 : 3),
+                decoration: BoxDecoration(color: value ? Colors.white : C.muted, shape: BoxShape.circle),
+              ),
+            ),
+          ),
+        ),
+      );
+}
+
 /// Плавное раскрытие и сворачивание блока: высота меняется, а содержимое проявляется и тает.
 /// При сворачивании содержимое остаётся на месте до конца анимации, а не исчезает сразу.
 class Reveal extends StatefulWidget {
@@ -352,7 +459,7 @@ class GhostButton extends StatelessWidget {
           overlayColor: WidgetStateProperty.all(C.orange.withValues(alpha: 0.08)),
         ),
         icon: busy
-            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: C.orange))
+            ? const Spinner(size: 18)
             : Icon(icon ?? Icons.circle, size: 18),
         label: Text(label),
       );

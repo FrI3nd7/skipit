@@ -80,6 +80,7 @@ void main() {
         await tester.tap(find.byIcon(Icons.more_horiz_rounded).last);
         await tester.pump(const Duration(milliseconds: 300));
         expect(find.text('Удалить подписку'), findsOneWidget);
+        expect(find.text('Закрепить вверху'), findsOneWidget);
         expect(find.text('Выбрать самый быстрый'), findsNothing);
         await tester.tap(find.text('Скопировать ссылку'));
         await tester.pump(const Duration(milliseconds: 300));

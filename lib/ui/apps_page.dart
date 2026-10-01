@@ -78,10 +78,19 @@ class _AppsPageState extends State<AppsPage> {
     final state = AppScope.of(context);
     final rules = state.appRules;
 
+    // Пояснение зависит и от режима, и от того, есть ли в списке программы:
+    // про «список ниже» говорим, только когда он не пуст.
+    final empty = rules.entries.isEmpty;
     final hint = switch (rules.mode) {
-      AppRoutingMode.off => 'Все программы идут через VPN. Список ниже не используется.',
-      AppRoutingMode.allExcept => 'Все программы идут через VPN, а программы из списка — напрямую.',
-      AppRoutingMode.onlySelected => 'Через VPN идут только программы из списка, остальные — напрямую.',
+      AppRoutingMode.off => empty
+          ? 'Правила выключены: все программы идут через VPN.'
+          : 'Правила выключены: все программы идут через VPN, список ниже не применяется.',
+      AppRoutingMode.allExcept => empty
+          ? 'Все программы идут через VPN. Добавьте программы, которые должны идти напрямую.'
+          : 'Все программы идут через VPN, а программы из списка — напрямую.',
+      AppRoutingMode.onlySelected => empty
+          ? 'Через VPN пойдут только программы из списка. Сейчас он пуст — через VPN не идёт ничего.'
+          : 'Через VPN идут только программы из списка, остальные — напрямую.',
     };
 
     return Column(children: [
@@ -154,7 +163,10 @@ class _AppsPageState extends State<AppsPage> {
               ),
             ),
             const SizedBox(height: 10),
-            Text(hint, textAlign: TextAlign.center, style: TextStyle(color: C.muted, fontSize: 12.5)),
+            // Пояснение к выбранному режиму — заметнее обычной подписи: от него зависит смысл всего списка.
+            Text(hint,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: C.text.withValues(alpha: 0.85), fontSize: 13.5, fontWeight: FontWeight.w600)),
             const SizedBox(height: 16),
             // Заметная плашка: правила меняются только после переподключения, это легко пропустить.
             if (state.appRulesPending)
@@ -190,7 +202,7 @@ class _AppsPageState extends State<AppsPage> {
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 40),
                 child: Center(
-                  child: Text('Список пуст. Добавьте программу, папку или имя процесса.',
+                  child: Text('Программ пока нет. Добавьте их кнопками вверху: программу, папку или имя процесса.',
                       style: TextStyle(color: C.muted)),
                 ),
               ),
@@ -218,7 +230,7 @@ class _AppsPageState extends State<AppsPage> {
                         ),
                         Tooltip(
                           message: e.enabled ? 'Правило включено' : 'Правило выключено',
-                          child: Switch(
+                          child: AppSwitch(
                             value: e.enabled,
                             onChanged: (v) {
                               e.enabled = v;
@@ -309,70 +321,75 @@ class _RunningAppsDialogState extends State<_RunningAppsDialog> {
             Expanded(
               child: list.isEmpty
                   ? Center(child: Text('Ничего не найдено', style: TextStyle(color: C.muted)))
-                  : ListView.builder(
-                      controller: _scroll,
-                      itemCount: list.length,
-                      itemBuilder: (_, i) {
-                        final a = list[i];
-                        final added = widget.isAdded(a);
-                        final checked = _selected.contains(a.path);
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 4),
-                          child: Hover(
-                            enabled: !added,
-                            builder: (context, hovered) => GestureDetector(
-                              onTap: added
-                                  ? null
-                                  : () => setState(() => checked ? _selected.remove(a.path) : _selected.add(a.path)),
-                              child: AnimatedContainer(
-                                duration: const Duration(milliseconds: 140),
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
-                                decoration: BoxDecoration(
-                                  color: checked
-                                      ? C.orange.withValues(alpha: 0.12)
-                                      : (hovered ? C.hover : Colors.transparent),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(
-                                      color: checked ? C.orange.withValues(alpha: 0.6) : Colors.transparent),
-                                ),
-                                child: Opacity(
-                                  opacity: added ? 0.45 : 1,
-                                  child: Row(children: [
-                                    AppIcon(path: a.path),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                        Text(a.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                                        Text(a.path,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(color: C.muted, fontSize: 12)),
+                  // Края списка растворяются, а не обрезаются резкой линией под поиском и над кнопками.
+                  : FadeEdges(
+                      child: ListView.builder(
+                          controller: _scroll,
+                          // Место справа под ползунок прокрутки — чтобы он не ложился на карточки программ.
+                          padding: const EdgeInsets.only(right: 14, top: 10, bottom: 10),
+                          itemCount: list.length,
+                          itemBuilder: (_, i) {
+                            final a = list[i];
+                            final added = widget.isAdded(a);
+                            final checked = _selected.contains(a.path);
+                            return Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Hover(
+                                enabled: !added,
+                                builder: (context, hovered) => GestureDetector(
+                                  onTap: added
+                                      ? null
+                                      : () => setState(() => checked ? _selected.remove(a.path) : _selected.add(a.path)),
+                                  child: AnimatedContainer(
+                                    duration: const Duration(milliseconds: 140),
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+                                    decoration: BoxDecoration(
+                                      color: checked
+                                          ? C.orange.withValues(alpha: 0.12)
+                                          : (hovered ? C.hover : Colors.transparent),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                          color: checked ? C.orange.withValues(alpha: 0.6) : Colors.transparent),
+                                    ),
+                                    child: Opacity(
+                                      opacity: added ? 0.45 : 1,
+                                      child: Row(children: [
+                                        AppIcon(path: a.path),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                                            Text(a.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                            Text(a.path,
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(color: C.muted, fontSize: 12)),
+                                          ]),
+                                        ),
+                                        const SizedBox(width: 10),
+                                        if (added)
+                                          Text('в списке', style: TextStyle(color: C.muted, fontSize: 12))
+                                        else
+                                          // Без анимации: галочка и оранжевая подложка появляются вместе.
+                                          Container(
+                                            width: 22,
+                                            height: 22,
+                                            decoration: BoxDecoration(
+                                              gradient: checked ? C.gradient : null,
+                                              borderRadius: BorderRadius.circular(7),
+                                              border: checked ? null : Border.all(color: C.border, width: 1.5),
+                                            ),
+                                            child: checked
+                                                ? const Icon(Icons.check_rounded, size: 16, color: Colors.white)
+                                                : null,
+                                          ),
                                       ]),
                                     ),
-                                    const SizedBox(width: 10),
-                                    if (added)
-                                      Text('в списке', style: TextStyle(color: C.muted, fontSize: 12))
-                                    else
-                                      // Без анимации: галочка и оранжевая подложка появляются вместе.
-                                      Container(
-                                        width: 22,
-                                        height: 22,
-                                        decoration: BoxDecoration(
-                                          gradient: checked ? C.gradient : null,
-                                          borderRadius: BorderRadius.circular(7),
-                                          border: checked ? null : Border.all(color: C.border, width: 1.5),
-                                        ),
-                                        child: checked
-                                            ? const Icon(Icons.check_rounded, size: 16, color: Colors.white)
-                                            : null,
-                                      ),
-                                  ]),
+                                  ),
                                 ),
                               ),
-                            ),
-                          ),
-                        );
-                      },
+                            );
+                          },
+                        ),
                     ),
             ),
             const SizedBox(height: 12),

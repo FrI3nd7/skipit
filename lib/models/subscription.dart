@@ -1,4 +1,5 @@
 import '../core/util.dart';
+import '../core/windows.dart';
 
 class Subscription {
   Subscription({
@@ -16,6 +17,7 @@ class Subscription {
     this.announce,
     this.error,
     this.expanded = true,
+    this.pinned = false,
   }) : id = id ?? newId();
 
   final String id;
@@ -32,6 +34,9 @@ class Subscription {
   String? announce;
   String? error;
   bool expanded;
+
+  /// Закреплённые подписки показываются в списке первыми.
+  bool pinned;
 
   String get displayName {
     if (name.isNotEmpty) return name;
@@ -81,11 +86,16 @@ class Subscription {
     final interval = asInt(meta['profile-update-interval']);
     if (interval != null && interval > 0) updateIntervalHours = interval;
 
-    supportUrl = meta['support-url'] ?? supportUrl;
-    webPageUrl = meta['profile-web-page-url'] ?? webPageUrl;
+    // Адреса от провайдера принимаем только веб-ссылками (http/https/tg) — их потом открывает система.
+    String? safe(String? url) => url != null && WinSys.isSafeUrl(url) ? url.trim() : null;
+    supportUrl = safe(meta['support-url']) ?? supportUrl;
+    webPageUrl = safe(meta['profile-web-page-url']) ?? webPageUrl;
     final announceValue = meta['announce'];
     announce = announceValue == null ? null : decodeMaybeBase64Prefixed(announceValue);
   }
+
+  /// Сохранённый адрес, если это обычная веб-ссылка (файл данных тоже могли подменить).
+  static String? _safeUrl(Object? url) => url is String && WinSys.isSafeUrl(url) ? url : null;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -102,6 +112,7 @@ class Subscription {
         'announce': announce,
         'error': error,
         'expanded': expanded,
+        'pinned': pinned,
       };
 
   factory Subscription.fromJson(Map<String, dynamic> j) => Subscription(
@@ -114,10 +125,11 @@ class Subscription {
         download: asInt(j['download']),
         total: asInt(j['total']),
         expire: DateTime.tryParse(j['expire'] as String? ?? ''),
-        supportUrl: j['supportUrl'] as String?,
-        webPageUrl: j['webPageUrl'] as String?,
+        supportUrl: _safeUrl(j['supportUrl']),
+        webPageUrl: _safeUrl(j['webPageUrl']),
         announce: j['announce'] as String?,
         error: j['error'] as String?,
         expanded: parseBool(j['expanded'], true),
+        pinned: parseBool(j['pinned']),
       );
 }

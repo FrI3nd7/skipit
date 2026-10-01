@@ -10,6 +10,7 @@ import '../core/tray.dart';
 import '../core/windows.dart';
 import '../models/settings.dart';
 import '../state/app_scope.dart';
+import '../state/app_state.dart';
 import '../version.dart';
 import 'theme.dart';
 import 'widgets.dart';
@@ -41,6 +42,9 @@ Future<void> installAppUpdate(BuildContext context) async {
 class SettingsPage extends StatelessWidget {
   const SettingsPage({super.key});
 
+  /// Версии уже определены, и какого-то ядра нет на месте.
+  static bool _coresMissing(AppState state) =>
+      state.coreVersions.isNotEmpty && CoreSpec.all.any((c) => state.coreVersions[c.name] == null);
   @override
   Widget build(BuildContext context) {
     final state = AppScope.of(context);
@@ -49,7 +53,7 @@ class SettingsPage extends StatelessWidget {
     Widget toggle(String title, String subtitle, bool value, void Function(bool) set) => _Row(
           title: title,
           subtitle: subtitle,
-          trailing: Switch(
+          trailing: AppSwitch(
             value: value,
             onChanged: (v) {
               set(v);
@@ -224,8 +228,7 @@ class SettingsPage extends StatelessWidget {
             trailing: Wrap(spacing: 8, children: [
               if (state.appUpdate != null)
                 state.downloadingAppUpdate
-                    ? const SizedBox(
-                        width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: C.orange))
+                    ? const Spinner(size: 22)
                     : GradientButton(
                         label: 'Обновить',
                         icon: Icons.download_rounded,
@@ -255,15 +258,21 @@ class SettingsPage extends StatelessWidget {
               },
             ),
           ),
-          // Ядра вложены в программу и обновляются только вместе с ней — здесь лишь их версии.
-          for (final core in CoreSpec.all)
-            _Row(
-              title: core.name,
-              subtitle: state.coreVersions[core.name] ?? 'не найдено — переустановите SkipIt',
-              trailing: state.coreVersions[core.name] != null
-                  ? Icon(Icons.check_circle_rounded, color: C.green, size: 20)
-                  : Icon(Icons.error_rounded, color: C.red, size: 20),
-            ),
+          // Ядра вложены в программу и обновляются только вместе с ней — здесь лишь их версии, одной строкой.
+          // Значок появляется, только если какое-то ядро не найдено (повреждённая установка).
+          _Row(
+            title: 'Ядра',
+            subtitle: [
+              for (final core in CoreSpec.all) '${core.name} ${state.coreVersions[core.name] ?? '— не найдено'}',
+            ].join(' · '),
+            subtitleColor: _coresMissing(state) ? C.red : null,
+            trailing: _coresMissing(state)
+                ? Tooltip(
+                    message: 'Ядро не найдено — переустановите SkipIt',
+                    child: Icon(Icons.error_rounded, color: C.red, size: 20),
+                  )
+                : const SizedBox.shrink(),
+          ),
         ]),
       ],
     );

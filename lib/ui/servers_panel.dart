@@ -13,6 +13,7 @@ import '../state/app_state.dart';
 import 'app_menu.dart';
 import 'flag_text.dart';
 import 'shell.dart';
+import 'smooth_scroll.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -67,7 +68,9 @@ class _ServersPanelState extends State<ServersPanel> {
     final state = AppScope.of(context);
     final hasAny = state.subscriptions.isNotEmpty || state.servers.isNotEmpty;
     final groups = <(Subscription?, List<ServerProfile>)>[
-      for (final sub in state.subscriptions) (sub, _filter(sub, state.serversOf(sub.id))),
+      // Закреплённые подписки — первыми; внутри каждой группы порядок остаётся прежним.
+      for (final sub in [...state.subscriptions.where((s) => s.pinned), ...state.subscriptions.where((s) => !s.pinned)])
+        (sub, _filter(sub, state.serversOf(sub.id))),
       if (state.serversOf(null).isNotEmpty) (null, _filter(null, state.serversOf(null))),
       // При поиске группы без совпадений не показываем.
     ].where((g) => _query.isEmpty || g.$2.isNotEmpty).toList();
@@ -193,7 +196,9 @@ class _IconAction extends StatelessWidget {
               ),
               child: Center(
                 child: busy
-                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: C.orange))
+                    // Пока идёт работа, оживает сам значок кнопки: стрелки обновления вращаются,
+                    // остальные значки (проверка задержки) мигают — так действия не путаются.
+                    ? Spinner(size: 20, icon: icon, pulse: icon != Icons.sync_rounded)
                     : Icon(icon, size: 20, color: hovered ? C.orange : C.muted),
               ),
             ),
@@ -317,10 +322,22 @@ class _GroupCardState extends State<_GroupCard> {
                 const SizedBox(width: 6),
                 Expanded(
                   child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    FlagText(sub?.displayName ?? 'Мои серверы',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                    Row(children: [
+                      Flexible(
+                        child: FlagText(sub?.displayName ?? 'Мои серверы',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                      ),
+                      // Значок закреплённой подписки.
+                      if (sub?.pinned ?? false) ...[
+                        const SizedBox(width: 6),
+                        const Tooltip(
+                          message: 'Закреплена вверху списка',
+                          child: Icon(Icons.push_pin_rounded, size: 14, color: C.orange),
+                        ),
+                      ],
+                    ]),
                     const SizedBox(height: 2),
                     Text(subtitle, maxLines: 1, style: TextStyle(color: C.muted, fontSize: 11.5)),
                   ]),
@@ -342,14 +359,19 @@ class _GroupCardState extends State<_GroupCard> {
                 if (sub != null)
                   _MenuAction(
                     tooltip: 'Ещё',
-                    items: const [
-                      AppMenuItem('edit', 'Изменить', icon: Icons.edit_rounded),
-                      AppMenuItem('copy', 'Скопировать ссылку', icon: Icons.link_rounded),
-                      AppMenuItem.divider(),
-                      AppMenuItem('delete', 'Удалить подписку', icon: Icons.delete_outline_rounded, danger: true),
+                    items: [
+                      AppMenuItem('pin', sub.pinned ? 'Открепить' : 'Закрепить вверху',
+                          icon: sub.pinned ? Icons.push_pin_outlined : Icons.push_pin_rounded),
+                      const AppMenuItem('edit', 'Изменить', icon: Icons.edit_rounded),
+                      const AppMenuItem('copy', 'Скопировать ссылку', icon: Icons.link_rounded),
+                      const AppMenuItem.divider(),
+                      const AppMenuItem('delete', 'Удалить подписку', icon: Icons.delete_outline_rounded, danger: true),
                     ],
                     onSelected: (v) async {
                       switch (v) {
+                        case 'pin':
+                          sub.pinned = !sub.pinned;
+                          state.changed();
                         case 'edit':
                           await _edit(state, sub);
                         case 'copy':
@@ -482,6 +504,8 @@ class _ServerRow extends StatelessWidget {
       state.toast('Не удалось собрать конфиг: $e');
       return;
     }
+    // Тот же контроллер плавной прокрутки колесом, что и на страницах программы.
+    final scroll = SmoothScrollController();
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -495,9 +519,27 @@ class _ServerRow extends StatelessWidget {
             borderRadius: BorderRadius.circular(12),
             border: Border.all(color: C.border),
           ),
-          child: SingleChildScrollView(
-            child: SelectableText(json,
-                style: TextStyle(fontFamily: 'Consolas', fontSize: 12.5, height: 1.45, color: C.text)),
+          // Только здесь ползунок всегда виден и светлее обычного: конфиг длинный, а на тёмной
+          // подложке стандартный ползунок терялся. В остальной программе он прежний.
+          child: ScrollbarTheme(
+            data: ScrollbarThemeData(
+              thumbVisibility: WidgetStateProperty.all(true),
+              thickness: WidgetStateProperty.all(7),
+              radius: const Radius.circular(4),
+              thumbColor: WidgetStateProperty.resolveWith((s) =>
+                  s.contains(WidgetState.dragged) || s.contains(WidgetState.hovered)
+                      ? C.orange.withValues(alpha: 0.85)
+                      : C.muted.withValues(alpha: 0.6)),
+            ),
+            child: Scrollbar(
+              controller: scroll,
+              child: SingleChildScrollView(
+                controller: scroll,
+                padding: const EdgeInsets.only(right: 12),
+                child: SelectableText(json,
+                    style: TextStyle(fontFamily: 'Consolas', fontSize: 12.5, height: 1.45, color: C.text)),
+              ),
+            ),
           ),
         ),
         actions: [
@@ -513,6 +555,7 @@ class _ServerRow extends StatelessWidget {
         ],
       ),
     );
+    scroll.dispose();
   }
 
   @override

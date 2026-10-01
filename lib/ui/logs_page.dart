@@ -7,6 +7,7 @@ import '../core/core_manager.dart';
 import '../core/paths.dart';
 import '../state/app_scope.dart';
 import 'flag_text.dart';
+import 'smooth_scroll.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -173,7 +174,11 @@ class _SessionList extends StatelessWidget {
       }
       rows.add(_SessionTile(session: s, selected: identical(s, selected), onTap: () => onSelect(s)));
     }
-    return ListView(primary: false, padding: const EdgeInsets.only(bottom: 10), children: rows);
+    // Свой контроллер плавной прокрутки: основной контроллер страницы занят списком строк справа.
+    return SmoothScroll(
+      builder: (context, controller) =>
+          ListView(controller: controller, padding: const EdgeInsets.only(bottom: 10), children: rows),
+    );
   }
 }
 
@@ -355,7 +360,7 @@ class _SessionView extends StatelessWidget {
       Expanded(
         child: all == null
             ? const Center(
-                child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2, color: C.orange)))
+                child: Spinner(size: 24))
             : lines.isEmpty
                 ? Center(child: Text('В этом журнале таких записей нет', style: TextStyle(color: C.muted)))
                 : SelectionArea(

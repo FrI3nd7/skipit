@@ -13,9 +13,14 @@ namespace {
 constexpr UINT kTrayMessage = WM_APP + 1;
 // Отложенное закрытие по команде "quit" из Dart (после того как Dart всё остановил).
 constexpr UINT kQuitMessage = WM_APP + 2;
+// Выбран пункт меню значка в трее (wParam — команда).
+constexpr UINT kTrayMenuCommand = WM_APP + 3;
 constexpr UINT kCmdOpen = 1;
 constexpr UINT kCmdToggle = 2;
 constexpr UINT kCmdExit = 3;
+// Выбор режима и сервера в меню значка: база плюс номер пункта.
+constexpr UINT kCmdModeBase = 100;
+constexpr UINT kCmdServerBase = 1000;
 constexpr wchar_t kRegPlacement[] = L"WindowPlacement";
 
 // Положение окна тестовой сборки хранится отдельно от установленной программы.
@@ -161,35 +166,13 @@ void FlutterWindow::ShowFromTray() {
 }
 
 void FlutterWindow::ShowTrayMenu() {
-  HMENU menu = CreatePopupMenu();
-  AppendMenuW(menu, MF_STRING, kCmdOpen, label_open_.c_str());
-  AppendMenuW(menu, MF_STRING, kCmdToggle, label_toggle_.c_str());
-  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(menu, MF_STRING, kCmdExit, label_exit_.c_str());
-  SetMenuDefaultItem(menu, kCmdOpen, FALSE);
-
+  // Своё меню в стиле программы (tray_menu.cpp); выбранный пункт придёт сообщением kTrayMenuCommand.
   POINT pt;
   GetCursorPos(&pt);
-  // Без этого меню не закрывается при клике мимо него (особенность Windows).
-  SetForegroundWindow(GetHandle());
-  const UINT cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY,
-                                  pt.x, pt.y, 0, GetHandle(), nullptr);
-  DestroyMenu(menu);
-  PostMessage(GetHandle(), WM_NULL, 0, 0);
-
-  switch (cmd) {
-    case kCmdOpen:
-      ShowFromTray();
-      break;
-    case kCmdToggle:
-      if (tray_channel_) tray_channel_->InvokeMethod("toggle", nullptr);
-      break;
-    case kCmdExit:
-      if (tray_channel_) tray_channel_->InvokeMethod("exit", nullptr);
-      break;
-  }
+  if (tray_menu_.status.empty()) tray_menu_.title = IsDevBuild() ? L"SkipIt Dev" : L"SkipIt";
+  ::ShowTrayMenu(GetHandle(), kTrayMenuCommand, pt, tray_menu_,
+                 TrayMenuCommands{kCmdToggle, kCmdOpen, kCmdExit, kCmdModeBase, kCmdServerBase});
 }
-
 void FlutterWindow::HandleTrayCall(
     const flutter::MethodCall<flutter::EncodableValue>& call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
@@ -210,9 +193,55 @@ void FlutterWindow::HandleTrayCall(
           tray_icon_.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
         }
       }
-      if (auto v = text("open")) label_open_ = *v;
-      if (auto v = text("toggle")) label_toggle_ = *v;
-      if (auto v = text("exit")) label_exit_ = *v;
+      if (auto v = text("open")) tray_menu_.label_open = *v;
+      if (auto v = text("toggle")) tray_menu_.label_toggle = *v;
+      if (auto v = text("exit")) tray_menu_.label_exit = *v;
+      if (auto v = text("title")) tray_menu_.title = *v;
+      if (auto v = text("status")) tray_menu_.status = *v;
+      if (auto v = text("server")) tray_menu_.server = *v;
+      auto state = args->find(flutter::EncodableValue("state"));
+      if (state != args->end()) {
+        if (const auto* n = std::get_if<int32_t>(&state->second)) tray_menu_.state = *n;
+      }
+      auto dark = args->find(flutter::EncodableValue("dark"));
+      if (dark != args->end()) {
+        if (const auto* b = std::get_if<bool>(&dark->second)) tray_menu_.dark = *b;
+      }
+      if (auto v = text("modeLabel")) tray_menu_.label_mode = *v;
+      if (auto v = text("serversLabel")) tray_menu_.label_servers = *v;
+      auto number = [args](const char* key, int fallback) {
+        auto it = args->find(flutter::EncodableValue(key));
+        if (it == args->end()) return fallback;
+        const auto* n = std::get_if<int32_t>(&it->second);
+        return n ? static_cast<int>(*n) : fallback;
+      };
+      tray_menu_.mode = number("mode", tray_menu_.mode);
+      tray_menu_.selected_server = number("selectedServer", tray_menu_.selected_server);
+      auto modes = args->find(flutter::EncodableValue("modes"));
+      if (modes != args->end()) {
+        if (const auto* list = std::get_if<flutter::EncodableList>(&modes->second)) {
+          tray_menu_.modes.clear();
+          for (const auto& value : *list) {
+            if (const auto* s = std::get_if<std::string>(&value)) tray_menu_.modes.push_back(Utf8ToWide(*s));
+          }
+        }
+      }
+      auto servers = args->find(flutter::EncodableValue("servers"));
+      if (servers != args->end()) {
+        if (const auto* list = std::get_if<flutter::EncodableList>(&servers->second)) {
+          tray_menu_.servers.clear();
+          for (const auto& value : *list) {
+            const auto* entry = std::get_if<flutter::EncodableMap>(&value);
+            if (!entry) continue;
+            auto field = [entry](const char* key) {
+              auto it = entry->find(flutter::EncodableValue(key));
+              const auto* s = it == entry->end() ? nullptr : std::get_if<std::string>(&it->second);
+              return s ? Utf8ToWide(*s) : std::wstring();
+            };
+            tray_menu_.servers.push_back(TrayMenuServer{field("name"), field("flag")});
+          }
+        }
+      }
       auto it = args->find(flutter::EncodableValue("closeToTray"));
       if (it != args->end()) {
         if (const auto* b = std::get_if<bool>(&it->second)) close_to_tray_ = *b;
@@ -276,6 +305,30 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
         case WM_RBUTTONUP:
         case WM_CONTEXTMENU:
           ShowTrayMenu();
+          break;
+      }
+      return 0;
+    case kTrayMenuCommand:
+      switch (wparam) {
+        case kCmdOpen:
+          ShowFromTray();
+          break;
+        case kCmdToggle:
+          if (tray_channel_) tray_channel_->InvokeMethod("toggle", nullptr);
+          break;
+        case kCmdExit:
+          if (tray_channel_) tray_channel_->InvokeMethod("exit", nullptr);
+          break;
+        default:
+          // Выбран режим или сервер — номер пункта уходит в Dart.
+          if (!tray_channel_) break;
+          if (wparam >= kCmdServerBase) {
+            tray_channel_->InvokeMethod(
+                "server", std::make_unique<flutter::EncodableValue>(static_cast<int32_t>(wparam - kCmdServerBase)));
+          } else if (wparam >= kCmdModeBase) {
+            tray_channel_->InvokeMethod(
+                "mode", std::make_unique<flutter::EncodableValue>(static_cast<int32_t>(wparam - kCmdModeBase)));
+          }
           break;
       }
       return 0;

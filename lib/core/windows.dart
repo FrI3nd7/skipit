@@ -28,6 +28,25 @@ class SystemProxyState {
       );
 }
 
+/// Другой VPN, который сейчас подключён и помешает SkipIt.
+class VpnConflict {
+  VpnConflict(this.name);
+
+  /// Название для пользователя: «Happ», «SkipIt (другая копия)», имя адаптера.
+  final String name;
+
+  /// Процессы, которые нужно закрыть. Пусто — закрыть сами не можем (найден только сетевой адаптер).
+  final pids = <int>[];
+
+  /// Пути этих процессов на момент проверки (номер процесса → файл).
+  final paths = <int, String>{};
+
+  /// Вторая копия SkipIt: её сначала просим выйти по-хорошему, а не «убиваем».
+  bool isSkipIt = false;
+
+  bool get canClose => pids.isNotEmpty;
+}
+
 class WinSys {
   // ---------- права ----------
 
@@ -43,7 +62,10 @@ class WinSys {
 
   /// Перезапуск приложения с UAC. true — пользователь согласился.
   static Future<bool> relaunchAsAdmin(List<String> extraArgs) async {
-    final args = ['--elevated', ...extraArgs].map((a) => "'${a.replaceAll("'", "''")}'").join(',');
+    // Каждый аргумент — в двойных кавычках: Start-Process склеивает список пробелами, и без кавычек
+    // аргумент с пробелом (например, ссылка) распался бы на несколько, в том числе на ключи.
+    String quote(String a) => "'\"${a.replaceAll('"', '').replaceAll("'", "''")}\"'";
+    final args = ['--elevated', ...extraArgs].map(quote).join(',');
     final script =
         "Start-Process -FilePath '${AppPaths.exe.replaceAll("'", "''")}' -ArgumentList $args -Verb RunAs";
     final r = await Process.run('powershell', ['-NoProfile', '-NonInteractive', '-Command', script]);
@@ -232,7 +254,18 @@ class WinSys {
     }
     return result;
   }
-  static Future<void> openUrl(String url) => Process.run('explorer', [url]);
+  /// Можно ли открывать такой адрес из данных провайдера: только веб-ссылки и Telegram.
+  /// Иначе провайдер (или тот, кто подменил его ответ) мог бы подсунуть путь к программе —
+  /// «Проводник» запустил бы её по клику на «Поддержка».
+  static bool isSafeUrl(String url) {
+    final uri = Uri.tryParse(url.trim());
+    return uri != null && const {'http', 'https', 'tg'}.contains(uri.scheme.toLowerCase()) && !url.contains('"');
+  }
+
+  static Future<void> openUrl(String url) async {
+    if (!isSafeUrl(url)) return;
+    await Process.run('explorer', [url.trim()]);
+  }
 
   /// Сетевой адаптер, через который сейчас идёт трафик в интернет (лучший маршрут до 8.8.8.8).
   /// Напрямую через WinAPI (GetBestInterface + GetIfEntry2) — мгновенно, без запуска PowerShell.
@@ -282,20 +315,160 @@ class WinSys {
     }
   }
 
+  /// Имена нашего TUN-адаптера (у тестовой копии имя своё). Списком — чтобы уборка зависших
+  /// адаптеров знала и имена, которые пробовали прежние версии.
+  static List<String> get tunNames => [
+        AppPaths.appName,
+        for (var i = 2; i <= 4; i++) '${AppPaths.appName} $i',
+      ];
+
+  /// Кусок PowerShell: в `$own` — идентификаторы устройств наших адаптеров. sing-box выводит GUID
+  /// адаптера из его имени (MD5 от "wintun" + имя), поэтому свои устройства известны заранее,
+  /// даже если Windows их сейчас не показывает.
+  static String get _ownTunIds =>
+      r"$md5 = [Security.Cryptography.MD5]::Create(); "
+      "\$own = @(${tunNames.map((n) => "'${n.replaceAll("'", "''")}'").join(',')}) | ForEach-Object { "
+      r"('SWD\WINTUN\{' + ([Guid]::new($md5.ComputeHash([Text.Encoding]::UTF8.GetBytes('wintun' + $_)))).ToString() + '}').ToUpper() }; ";
+
+  static Future<void> _runTunCleanup(String script) async {
+    // Удалять устройства может только администратор; без прав TUN всё равно не используется.
+    if (!isAdmin()) return;
+    try {
+      await Process.run('powershell', ['-NoProfile', '-NonInteractive', '-Command', _ownTunIds + script])
+          .timeout(const Duration(seconds: 20));
+    } catch (_) {}
+  }
+
+  /// Убирает собственные зависшие адаптеры SkipIt, оставшиеся после сбоя. Чужие не трогает.
+  /// Вызывать, только когда наш sing-box не запущен: работающий адаптер тоже был бы удалён.
+  static Future<void> removeOwnTunAdapters() =>
+      _runTunCleanup(r"foreach ($id in $own) { pnputil /remove-device $id 2>$null | Out-Null }");
+
+  /// Убирает адаптеры, оставшиеся от закрытых VPN-клиентов: туннельные устройства, которые сейчас
+  /// не работают. Действующие адаптеры (например, включённый WireGuard) и свои собственные не трогает.
+  /// Вызывается только после согласия пользователя закрыть другой VPN.
+  static Future<void> removeStaleForeignTunAdapters() => _runTunCleanup(
+      r"Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | "
+      r"Where-Object { $_.InstanceId -like 'SWD\WINTUN\*' -and $_.Status -ne 'OK' -and $own -notcontains $_.InstanceId.ToUpper() } | "
+      r"ForEach-Object { pnputil /remove-device $_.InstanceId 2>$null | Out-Null }");
+
   /// Другой VPN, который сейчас забирает весь трафик: маршрут в интернет идёт через виртуальный
   /// туннельный адаптер (Wintun, WireGuard, TAP, PPP). Свой адаптер не считается. При любой ошибке —
   /// пустой список: проверка не должна мешать подключению.
   static List<String> otherVpnAdapters() {
     final a = defaultRouteAdapter();
-    if (a == null || a.hardware || a.alias == AppPaths.appName) return const [];
+    if (a == null || a.hardware || tunNames.contains(a.alias)) return const [];
     // Типы адаптеров: 23 — PPP, 53 — виртуальный (Wintun/WireGuard), 131 — туннель.
     final tunnel = const {23, 53, 131}.contains(a.type) ||
         RegExp(r'\b(tap|tun|vpn|wintun|wireguard|openvpn)\b', caseSensitive: false).hasMatch(a.description);
     return tunnel ? [a.description.isNotEmpty ? a.description : a.alias] : const [];
   }
 
+  /// Ядра чужих VPN-клиентов (имена exe без расширения). Работающее ядро значит, что другой VPN
+  /// сейчас подключён: он занимает порты, маршруты и системный прокси.
+  static const _foreignCores = {
+    'xray', 'v2ray', 'sing-box', 'mihomo', 'clash', 'clash-meta', 'verge-mihomo', 'hysteria', 'hysteria2',
+    'tun2socks', 'hiddifycli', 'nekobox_core', 'skipit-xray', 'skipit-sing-box',
+  };
+
+  /// Известные VPN-клиенты: имя exe без расширения → название для пользователя.
+  static const _knownClients = {
+    'happ': 'Happ', 'incy': 'Incy', 'v2rayn': 'v2rayN', 'hiddify': 'Hiddify', 'nekoray': 'NekoRay',
+    'nekobox': 'NekoBox', 'throne': 'Throne', 'v2raytun': 'v2RayTun', 'karing': 'Karing',
+    'clash-verge': 'Clash Verge', 'clash for windows': 'Clash for Windows', 'amneziavpn': 'AmneziaVPN',
+    'skipit': 'SkipIt (другая копия)',
+  };
+
+  /// Другие VPN, которые сейчас подключены и будут мешать. Определяются по работающим ядрам
+  /// (xray, sing-box и т. п. не из нашей папки) и по туннельному адаптеру, через который идёт трафик.
+  /// Клиент, который просто открыт, но не подключён, помехой не считается.
+  static List<VpnConflict> vpnConflicts() {
+    final ownDir = '${File(AppPaths.exe).parent.path.toLowerCase()}\\';
+    final ownCore = '${AppPaths.coreDir.path.toLowerCase()}\\';
+    String base(String path) =>
+        path.split('\\').last.toLowerCase().replaceAll(RegExp(r'\.exe$'), '');
+    final others = [
+      for (final p in _processes())
+        if (!p.path.toLowerCase().startsWith(ownDir) && !p.path.toLowerCase().startsWith(ownCore)) p,
+    ];
+    final byName = <String, VpnConflict>{};
+    for (final core in others.where((p) => _foreignCores.contains(base(p.path)))) {
+      // Хозяин ядра — известный клиент, из папки которого (или выше) оно запущено.
+      final corePath = core.path.toLowerCase();
+      final owners = others.where((p) {
+        if (!_knownClients.containsKey(base(p.path))) return false;
+        final dir = p.path.toLowerCase();
+        return corePath.startsWith(dir.substring(0, dir.lastIndexOf('\\') + 1));
+      }).toList();
+      final name = owners.isNotEmpty
+          ? _knownClients[base(owners.first.path)]!
+          : base(core.path).startsWith('skipit-')
+              ? _knownClients['skipit']!
+              : 'другой VPN (${core.path.split('\\').last})';
+      final c = byName.putIfAbsent(name, () => VpnConflict(name));
+      c.pids.add(core.pid);
+      for (final o in owners) {
+        if (!c.pids.contains(o.pid)) c.pids.add(o.pid);
+      }
+      for (final pid in c.pids) {
+        c.paths[pid] = others.firstWhere((p) => p.pid == pid).path;
+      }
+      // Вторую копию SkipIt сначала просим выйти по-хорошему (она вернёт системный прокси).
+      if (name == _knownClients['skipit']) c.isSkipIt = true;
+    }
+    if (byName.isEmpty) {
+      // Ядер не нашли, но трафик идёт через чужой туннель (WireGuard, OpenVPN, корпоративный VPN) —
+      // закрыть его сами не можем, только предупредить.
+      for (final adapter in otherVpnAdapters()) {
+        byName[adapter] = VpnConflict(adapter);
+      }
+    }
+    return byName.values.toList();
+  }
+
+  /// Закрывает мешающие VPN, найденные [vpnConflicts].
+  static Future<void> closeVpnConflicts(List<VpnConflict> conflicts) async {
+    for (final c in conflicts) {
+      if (c.isSkipIt) {
+        // Команду выхода шлём сами по локальному порту второй копии. Чужой SkipIt.exe не запускаем:
+        // мы работаем с правами администратора, а файл с таким именем мог подложить кто угодно.
+        // 47813 — установленная программа, 47814 — тестовая копия; себе команду не шлём.
+        for (final port in [47813, 47814].where((p) => p != (AppPaths.isDev ? 47814 : 47813))) {
+          try {
+            final s = await Socket.connect(InternetAddress.loopbackIPv4, port, timeout: const Duration(seconds: 1));
+            s.write(jsonEncode(['--quit']));
+            await s.flush();
+            await s.close();
+          } catch (_) {}
+        }
+        await Future.delayed(const Duration(seconds: 3));
+      }
+      // Закрываем только те процессы, что видели при проверке: за это время номер процесса мог
+      // достаться другой программе, поэтому сверяем и путь.
+      final alive = {for (final p in _processes()) p.pid: p.path};
+      for (final pid in c.pids) {
+        if (alive[pid] != null && alive[pid] == c.paths[pid]) await killPid(pid);
+      }
+    }
+    // Закрытый клиент мог оставить системный прокси, указывающий на свой уже мёртвый порт, —
+    // тогда у браузеров пропал бы интернет. Такой прокси выключаем.
+    final proxy = await readProxy();
+    final m = RegExp(r'^(?:https?=)?(?:127\.0\.0\.1|localhost):(\d+)').firstMatch(proxy.server);
+    if (proxy.enabled && m != null) {
+      try {
+        final s = await Socket.connect(InternetAddress.loopbackIPv4, int.parse(m.group(1)!),
+            timeout: const Duration(milliseconds: 400));
+        s.destroy();
+      } catch (_) {
+        await restoreProxy(null);
+      }
+    }
+    // И адаптеры, оставшиеся от закрытых клиентов (пользователь согласился их закрыть).
+    await removeStaleForeignTunAdapters();
+  }
+
   /// Поднялся ли наш TUN-адаптер: трафик в интернет уже идёт через него.
-  static bool ownTunActive() => defaultRouteAdapter()?.alias == AppPaths.appName;
+  static bool ownTunActive() => tunNames.contains(defaultRouteAdapter()?.alias);
 
   static Future<void> killPid(int pid) async {
     await Process.run('taskkill', ['/F', '/T', '/PID', '$pid']);

@@ -10,6 +10,7 @@
 #include <memory>
 #include <string>
 
+#include "tray_menu.h"
 #include "win32_window.h"
 
 // Окно с Flutter-интерфейсом и значком в системном трее.
@@ -55,10 +56,8 @@ class FlutterWindow : public Win32Window {
   bool start_maximized_ = false;
   // Идёт перетаскивание/изменение размера — сохраняем только в конце.
   bool in_size_move_ = false;
-  // Подписи меню приходят из Dart; до этого — запасные английские.
-  std::wstring label_open_ = L"Open";
-  std::wstring label_toggle_ = L"Connect";
-  std::wstring label_exit_ = L"Exit";
+  // Содержимое меню значка (подписи, статус, тема) приходит из Dart; до этого — запасные английские подписи.
+  TrayMenuModel tray_menu_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

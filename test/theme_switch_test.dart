@@ -23,6 +23,8 @@ void main() {
     await tester.pump(const Duration(milliseconds: 300));
     Color background() => tester.widget<Scaffold>(find.byType(Scaffold).first).backgroundColor!;
     expect(background(), Palette.dark.bg);
+    // Встроенные подписи Flutter — на русском (подсказка кнопки закрытия уведомления и т. п.).
+    expect(MaterialLocalizations.of(tester.element(find.byType(Scaffold).first)).closeButtonTooltip, 'Закрыть');
 
     // Открываем «Настройки» и переключаем тему — раздел должен остаться открытым.
     await tester.tap(find.byIcon(Icons.tune_rounded).first);

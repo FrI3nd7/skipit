@@ -184,11 +184,6 @@ ThemeData buildTheme() {
       labelStyle: TextStyle(color: C.muted),
       hintStyle: TextStyle(color: C.muted),
     ),
-    switchTheme: SwitchThemeData(
-      thumbColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? Colors.white : C.muted),
-      trackColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? C.orange : C.surface2),
-      trackOutlineColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.selected) ? C.orange : C.border),
-    ),
     textButtonTheme:
         TextButtonThemeData(style: TextButton.styleFrom(foregroundColor: dark ? C.orangeLight : C.orange)),
     outlinedButtonTheme: OutlinedButtonThemeData(
@@ -203,16 +198,6 @@ ThemeData buildTheme() {
       decoration: BoxDecoration(color: C.surface2, borderRadius: BorderRadius.circular(8), border: Border.all(color: C.border)),
       textStyle: TextStyle(color: C.text, fontSize: 12),
     ),
-    // Ползунок прокрутки заметный на любом фоне; под курсором и при перетаскивании — оранжевый.
-    scrollbarTheme: ScrollbarThemeData(
-      thumbColor: WidgetStateProperty.resolveWith((s) => s.contains(WidgetState.dragged)
-          ? C.orange
-          : s.contains(WidgetState.hovered)
-              ? C.orange.withValues(alpha: 0.8)
-              : C.muted.withValues(alpha: 0.55)),
-      thickness: WidgetStateProperty.all(7),
-      radius: const Radius.circular(4),
-      thumbVisibility: WidgetStateProperty.all(true),
-    ),
+    scrollbarTheme: ScrollbarThemeData(thumbColor: WidgetStateProperty.all(C.border)),
   );
 }

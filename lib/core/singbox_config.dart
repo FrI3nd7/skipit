@@ -51,6 +51,7 @@ class SingboxConfig {
     required RoutingProfile routing,
     required AppRules apps,
     required List<String> serverDomains,
+
   }) {
     final rules = <Map<String, dynamic>>[
       {'action': 'sniff'},
