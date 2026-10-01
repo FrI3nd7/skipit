@@ -100,7 +100,7 @@ void main() {
         // Меню сервера: проверка задержки и просмотр JSON, без «Скопировать ссылку» и «Переименовать».
         await tester.tap(find.byIcon(Icons.more_vert_rounded).first);
         await tester.pump(const Duration(milliseconds: 300));
-        expect(find.text('Проверить задержку'), findsOneWidget);
+        expect(find.text('Проверить задержку (пинг)'), findsOneWidget);
         expect(find.text('Переименовать'), findsNothing);
         await tester.tap(find.text('Показать JSON'));
         await tester.pump(const Duration(milliseconds: 400));

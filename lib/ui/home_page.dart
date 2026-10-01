@@ -10,6 +10,7 @@ import 'app_menu.dart';
 import 'flag_text.dart';
 import 'servers_panel.dart';
 import 'shell.dart';
+import 'smooth_scroll.dart';
 import 'theme.dart';
 import 'widgets.dart';
 
@@ -155,9 +156,13 @@ class _HomePageState extends State<HomePage> {
           ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
               SizedBox(
                 width: 400,
-                child: SingleChildScrollView(
-                  padding: const EdgeInsets.fromLTRB(20, 40, 20, 24),
-                  child: stage,
+                // Свой контроллер плавной прокрутки: основной контроллер страницы занят списком серверов.
+                child: SmoothScroll(
+                  builder: (context, controller) => SingleChildScrollView(
+                    controller: controller,
+                    padding: const EdgeInsets.fromLTRB(20, 40, 20, 24),
+                    child: stage,
+                  ),
                 ),
               ),
               const Expanded(

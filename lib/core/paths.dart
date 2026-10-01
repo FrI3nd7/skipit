@@ -69,6 +69,9 @@ class AppPaths {
   // У ядер свои имена: другие VPN-клиенты (например, Happ) закрывают чужие процессы xray.exe.
   static String get xrayExe => '${coreDir.path}\\skipit-xray.exe';
   static String get singboxExe => '${coreDir.path}\\skipit-sing-box.exe';
+
+  /// Драйвер адаптера для Xray, когда он сам поднимает TUN (в sing-box драйвер встроен).
+  static String get wintunDll => '${coreDir.path}\\wintun.dll';
   static String get configFile => '${dataDir.path}\\config.json';
   static String get tunConfigFile => '${dataDir.path}\\tun.json';
   static String get testConfigFile => '${dataDir.path}\\test.json';

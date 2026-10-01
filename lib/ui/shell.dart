@@ -377,14 +377,43 @@ class _Sidebar extends StatelessWidget {
             ),
             // Одинаковый отступ в обоих состояниях — пункты меню не сдвигаются при сворачивании.
             const SizedBox(height: 26),
-            for (var i = 0; i < items.length; i++)
-              _NavItem(
-                icon: items[i].$1,
-                label: items[i].$2,
-                selected: i == index,
-                collapsed: collapsed,
-                onTap: () => onSelect(i),
+            // Подсветка выбранного пункта — одна на всё меню и «скользит» к новому пункту,
+            // как у переключателей режимов.
+            Stack(fit: StackFit.passthrough, children: [
+              AnimatedPositioned(
+                duration: const Duration(milliseconds: 240),
+                curve: Curves.easeOutCubic,
+                top: index * _NavItem.extent,
+                left: 0,
+                right: 0,
+                height: _NavItem.height,
+                child: IgnorePointer(
+                  child: Container(
+                    alignment: Alignment.centerLeft,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      color: C.orange.withValues(alpha: 0.14),
+                    ),
+                    // Оранжевая метка слева у выбранного пункта.
+                    child: Container(
+                      width: 3,
+                      height: 18,
+                      decoration: BoxDecoration(color: C.orange, borderRadius: BorderRadius.circular(2)),
+                    ),
+                  ),
+                ),
               ),
+              Column(crossAxisAlignment: CrossAxisAlignment.stretch, mainAxisSize: MainAxisSize.min, children: [
+                for (var i = 0; i < items.length; i++)
+                  _NavItem(
+                    icon: items[i].$1,
+                    label: items[i].$2,
+                    selected: i == index,
+                    collapsed: collapsed,
+                    onTap: () => onSelect(i),
+                  ),
+              ]),
+            ]),
             const Spacer(),
             // Статус: одна раскладка в обоих состояниях — точка на месте, текст выезжает.
             Tooltip(
@@ -500,6 +529,10 @@ class _NavItem extends StatelessWidget {
   final bool collapsed;
   final VoidCallback onTap;
 
+  /// Высота пункта и шаг между пунктами (с отступом) — по ним движется подсветка в [_Sidebar].
+  static const height = 44.0;
+  static const extent = height + 4;
+
   @override
   Widget build(BuildContext context) {
     // Одна раскладка для обоих состояний: метка и иконка стоят на месте (иконка ровно по центру
@@ -509,23 +542,14 @@ class _NavItem extends StatelessWidget {
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 160),
-          height: 44,
+          height: height,
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(12),
-            color: selected ? C.orange.withValues(alpha: 0.14) : (hovered ? C.hover : Colors.transparent),
+            // Фон и метку выбранного пункта рисует скользящая подсветка в меню.
+            color: !selected && hovered ? C.hover : Colors.transparent,
           ),
           child: Row(children: [
-            // Оранжевая метка слева у выбранного пункта.
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 160),
-              width: 3,
-              height: 18,
-              decoration: BoxDecoration(
-                color: selected ? C.orange : Colors.transparent,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(width: 11),
+            const SizedBox(width: 14),
             Icon(icon, size: 20, color: selected || hovered ? C.orange : C.muted),
             Expanded(
               child: SlideLabel(
@@ -551,7 +575,7 @@ class _NavItem extends StatelessWidget {
       ),
     );
     return Padding(
-      padding: const EdgeInsets.only(bottom: 4),
+      padding: const EdgeInsets.only(bottom: extent - height),
       child: Tooltip(
         message: collapsed ? label : '',
         waitDuration: const Duration(milliseconds: 300),

@@ -40,7 +40,21 @@ class AppState extends ChangeNotifier {
   final _messages = StreamController<String>.broadcast();
   Stream<String> get messages => _messages.stream;
 
-  late final CoreProcess _xray = CoreProcess('xray', log)..onUnexpectedExit = _onCoreCrash;
+  late final CoreProcess _xray = CoreProcess('xray', log)
+    ..onUnexpectedExit = _onCoreCrash
+    ..intercept = _onXrayLine;
+
+  /// Что означает каждый выход текущего конфига Xray: через VPN, напрямую, блокировка.
+  final _routes = <String, ConnRoute>{};
+
+  /// Строки журнала доступа Xray — это соединения программ: они идут в список «Подключения»,
+  /// а не в общий журнал. Служебные (запросы DNS к самому ядру, статистика) пропускаются.
+  bool _onXrayLine(String line) {
+    final c = ConnEntry.tryParse(line, _routes);
+    if (c == null) return false;
+    if (c.route != ConnRoute.dns && c.inbound != 'api') log.addConnection(c);
+    return true;
+  }
   late final CoreProcess _singbox = CoreProcess('sing-box', log)..onUnexpectedExit = _onCoreCrash;
 
   ConnStatus status = ConnStatus.disconnected;
@@ -540,10 +554,19 @@ class AppState extends ChangeNotifier {
     if (isConnected) await reconnect();
   }
 
+  /// Действует ли сейчас выбранный профиль маршрутизации: у серверов с JSON-конфигом провайдера
+  /// работают его правила, профиль не применяется.
+  bool get routingApplies {
+    final server = selectedServer;
+    return server == null || XrayConfig.providerConfig(server) == null;
+  }
+
   void setRouting(String id) {
+    final same = settings.selectedRoutingId == id;
     settings.selectedRoutingId = id;
     changed();
-    if (isConnected) unawaited(reconnect());
+    // Переподключаемся, только если это что-то меняет: профиль другой и он действует.
+    if (isConnected && !same && routingApplies) unawaited(reconnect());
   }
 
   Future<void> setMode(ConnectionMode mode) async {
@@ -684,6 +707,10 @@ class AppState extends ChangeNotifier {
       final config = XrayConfig.build(server: server, routing: routing, settings: session);
       final xrayTun = this.xrayTun;
       if (xrayTun) {
+        if (!File(AppPaths.wintunDll).existsSync()) {
+          throw CoreException('Не найден файл wintun.dll рядом с ядром Xray — без него Xray не может создать адаптер. '
+              'Переустановите SkipIt или выберите ядро TUN «sing-box».');
+        }
         final domestic = Uri.tryParse(routing.domesticDnsAddress);
         XrayConfig.addTun(config, settings: session, apps: appRules, directDomains: [
           if (domestic != null && domestic.scheme == 'https' && InternetAddress.tryParse(domestic.host) == null)
@@ -692,6 +719,20 @@ class AppState extends ChangeNotifier {
         _appliedAppRules = appRules.signature;
         await _tunCleanup;
       }
+      _routes
+        ..clear()
+        ..addEntries([
+          for (final o in (config['outbounds'] as List).whereType<Map>())
+            if (o['tag'] is String)
+              MapEntry(
+                  o['tag'] as String,
+                  switch (o['protocol']) {
+                    'freedom' => ConnRoute.direct,
+                    'blackhole' => ConnRoute.block,
+                    'dns' => ConnRoute.dns,
+                    _ => ConnRoute.proxy,
+                  }),
+        ]);
       await File(AppPaths.configFile).writeAsString(const JsonEncoder.withIndent('  ').convert(config));
       await _xray.start(AppPaths.xrayExe, ['run', '-c', AppPaths.configFile],
           env: {'XRAY_LOCATION_ASSET': AppPaths.geoDir.path});
@@ -775,6 +816,13 @@ class AppState extends ChangeNotifier {
     return l.contains('configure tun interface') || l.contains('open interface take too much time');
   }
 
+  /// Xray начал создавать адаптер и на этом застрял: ядро так и не сообщило о запуске.
+  bool _xrayAdapterStuck() {
+    final text = log.lines.where((l) => l.source == 'xray').map((l) => l.text).join('\n');
+    final creating = text.lastIndexOf('Creating adapter');
+    return creating >= 0 && !text.substring(creating).contains('started');
+  }
+
   /// Последняя ошибка — не поднялся адаптер TUN: на главной предлагается режим «Прокси».
   bool tunFailed = false;
 
@@ -790,7 +838,7 @@ class AppState extends ChangeNotifier {
   String _tunFailure(String core) {
     final tail = log.tail(8, source: core);
     final lower = tail.toLowerCase();
-    if (_adapterTrouble(lower) || tail.trim().isEmpty) {
+    if (_adapterTrouble(lower) || tail.trim().isEmpty || (core == 'xray' && _xrayAdapterStuck())) {
       return 'Windows не смогла включить сетевой адаптер VPN — это сбой на стороне Windows, не настроек. '
           'Обычно помогает перезагрузка компьютера. Прямо сейчас можно подключиться в режиме «Прокси»: '
           'он работает без адаптера.';

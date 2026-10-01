@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:skipit/core/log_explain.dart';
 import 'package:skipit/core/log_store.dart';
 
 /// Журнал разбит на отрезки по подключениям, каждый отрезок — файл; журнал дня живёт 5 дней.
@@ -8,6 +9,41 @@ void main() {
   late Directory dir;
   setUp(() async => dir = await Directory.systemTemp.createTemp('skipit-logs'));
   tearDown(() async => dir.delete(recursive: true));
+
+  test('строка журнала доступа Xray разбирается в соединение: куда шло и каким путём', () {
+    const routes = {'proxy': ConnRoute.proxy, 'direct': ConnRoute.direct, 'block': ConnRoute.block};
+    // Строки в том виде, как их пишет Xray 26.9.30.
+    final a = ConnEntry.tryParse(
+        '2026/10/02 00:01:11.773977 from tcp:127.0.0.1:50349 accepted tcp:example.com:443 [socks >> direct]', routes)!;
+    expect((a.network, a.host, a.port, a.inbound, a.outbound, a.route),
+        ('tcp', 'example.com', 443, 'socks', 'direct', ConnRoute.direct));
+    final b = ConnEntry.tryParse('from tcp:127.0.0.1:1 accepted udp:[2a00:1450::8a]:443 [skipit-tun -> block]', routes)!;
+    expect((b.network, b.host, b.route), ('udp', '[2a00:1450::8a]', ConnRoute.block));
+    // Неизвестный выход (сервер провайдера с любым тегом) — это VPN.
+    expect(ConnEntry.tryParse('from 127.0.0.1:1 accepted tcp:a.com:80 [http -> de-1]', routes)!.route, ConnRoute.proxy);
+    expect(ConnEntry.tryParse('[Warning] core: Xray 26.9.30 started', routes), isNull);
+  });
+
+  test('соединения хранятся только в памяти: список сайтов на диск не пишется', () async {
+    final log = LogBuffer();
+    await log.open(dir);
+    log.startSession('Сервер');
+    log.addConnection(ConnEntry(
+        network: 'tcp', host: 'secret.example', port: 443, inbound: 'socks', outbound: 'proxy', route: ConnRoute.proxy));
+    log.endSession();
+    expect(log.sessions.single.connections, hasLength(1));
+    expect(log.sessions.single.file!.readAsStringSync(), isNot(contains('secret.example')));
+  });
+
+  test('к строкам ядра есть пояснения простыми словами, к строкам программы — нет', () {
+    expect(LogExplain.of('xray', '[Warning] core: Xray 26.9.30 started'), contains('запущено'));
+    expect(LogExplain.of('xray', 'proxy/http: failed to read response from ipv6.msftconnecttest.com > unexpected EOF'),
+        contains('ipv6.msftconnecttest.com'));
+    expect(LogExplain.of('xray', 'The "freedom.domainStrategy" setting is deprecated'), contains('устаревший'));
+    expect(LogExplain.of('sing-box', 'open interface take too much time'), contains('адаптер'));
+    expect(LogExplain.of('app', 'Ошибка подключения: timeout'), isNull);
+    expect(LogExplain.of('xray', 'A unified platform for anti-censorship.'), isNull);
+  });
 
   test('строки делятся на отрезки: без подключения → подключение → без подключения', () async {
     final log = LogBuffer();

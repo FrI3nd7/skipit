@@ -31,7 +31,9 @@ class RoutingPage extends StatelessWidget {
       state.routingProfiles.add(result);
     }
     state.changed();
-    if (state.isConnected && state.settings.selectedRoutingId == result.id) await state.reconnect();
+    if (state.isConnected && state.routingApplies && state.settings.selectedRoutingId == result.id) {
+      await state.reconnect();
+    }
   }
 
   /// Меню «Создать»: пустой профиль или один из шаблонов.

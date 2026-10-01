@@ -25,6 +25,14 @@ class CoreProcess {
   bool _stopping = false;
   void Function(int exitCode)? onUnexpectedExit;
 
+  /// Перехват строк вывода ядра: true — строка разобрана и в общий журнал не идёт.
+  bool Function(String line)? intercept;
+
+  void _feed(String line) {
+    if (intercept?.call(line) ?? false) return;
+    log.add(name, line);
+  }
+
   bool get running => _process != null;
   int? get pid => _process?.pid;
 
@@ -36,8 +44,8 @@ class CoreProcess {
     final p = await Process.start(exe, args,
         workingDirectory: File(exe).parent.path, environment: env);
     _process = p;
-    p.stdout.transform(utf8.decoder).listen((t) => log.add(name, t));
-    p.stderr.transform(utf8.decoder).listen((t) => log.add(name, t));
+    p.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen(_feed);
+    p.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen(_feed);
     unawaited(p.exitCode.then((code) {
       if (!identical(_process, p)) return;
       _process = null;

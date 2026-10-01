@@ -24,6 +24,54 @@ class LogLine {
   }
 }
 
+/// Куда ядро отправило соединение.
+enum ConnRoute { proxy, direct, block, dns }
+
+/// Одно соединение программы, как его записало ядро Xray: куда шло и каким путём отправлено.
+class ConnEntry {
+  ConnEntry({
+    required this.network,
+    required this.host,
+    required this.port,
+    required this.inbound,
+    required this.outbound,
+    required this.route,
+    DateTime? time,
+  }) : time = time ?? DateTime.now();
+
+  final DateTime time;
+
+  /// tcp или udp.
+  final String network;
+  final String host;
+  final int port;
+
+  /// Теги входа и выхода из конфига ядра (`socks`, `proxy`, `direct`…).
+  final String inbound;
+  final String outbound;
+  final ConnRoute route;
+
+  static final _access = RegExp(r'from \S+ accepted (?:(tcp|udp):)?(\S+):(\d+)(?: \[(.+?)\])?');
+
+  /// Разбирает строку журнала доступа Xray:
+  /// `… from 127.0.0.1:51234 accepted tcp:example.com:443 [socks -> proxy]`.
+  /// [routes] — что означает каждый выход конфига. null — это не строка о соединении.
+  static ConnEntry? tryParse(String line, Map<String, ConnRoute> routes) {
+    final m = _access.firstMatch(line);
+    if (m == null) return null;
+    final tags = (m.group(4) ?? '').split(RegExp(r'\s*(?:->|>>)\s*'));
+    final outbound = tags.length > 1 ? tags.last.trim() : '';
+    return ConnEntry(
+      network: m.group(1) ?? 'tcp',
+      host: m.group(2)!,
+      port: int.parse(m.group(3)!),
+      inbound: tags.first.trim(),
+      outbound: outbound,
+      route: routes[outbound] ?? ConnRoute.proxy,
+    );
+  }
+}
+
 /// Отрезок журнала: одно подключение к серверу или время без подключения между ними.
 class LogSession {
   LogSession({
@@ -60,6 +108,9 @@ class LogSession {
   /// Строки отрезка; null — ещё не прочитаны с диска (см. [LogBuffer.load]).
   List<LogLine>? lines;
 
+  /// Соединения программ за этот отрезок. Живут только в памяти: на диск список сайтов не пишется.
+  final connections = <ConnEntry>[];
+
   RandomAccessFile? _out;
   int _written = 0;
 
@@ -79,6 +130,9 @@ class LogBuffer extends ChangeNotifier {
 
   /// Больше строк одного отрезка в памяти не держим (при уровне debug ядро пишет очень много).
   static const maxLines = 5000;
+
+  /// Столько последних соединений помним в одном отрезке.
+  static const maxConnections = 2000;
 
   /// И больше этого в файл одного отрезка не пишем.
   static const _fileLimit = 4 * 1024 * 1024;
@@ -259,6 +313,15 @@ class LogBuffer extends ChangeNotifier {
         } catch (_) {}
       }
     }
+    notifyListeners();
+  }
+
+  /// Соединение программы (из журнала доступа Xray) — в текущий отрезок, только в память.
+  void addConnection(ConnEntry c) {
+    final list = _current?.connections;
+    if (list == null) return;
+    list.add(c);
+    if (list.length > maxConnections) list.removeRange(0, list.length - maxConnections);
     notifyListeners();
   }
 

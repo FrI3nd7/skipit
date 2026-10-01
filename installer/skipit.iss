@@ -51,6 +51,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "{#Release}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\core\skipit-xray.exe"; DestDir: "{app}\core"; Flags: ignoreversion
 Source: "..\core\skipit-sing-box.exe"; DestDir: "{app}\core"; Flags: ignoreversion
+; Драйвер адаптера для режима «TUN на ядре Xray» (из архива Xray-core).
+Source: "..\core\wintun.dll"; DestDir: "{app}\core"; Flags: ignoreversion
 ; Лицензии: своя и вложенных ядер (MPL-2.0 и GPL-3.0 требуют прикладывать их текст и ссылки на исходники).
 Source: "..\core\LICENSE-Xray.txt"; DestDir: "{app}\core"; Flags: ignoreversion
 Source: "..\core\LICENSE-sing-box.txt"; DestDir: "{app}\core"; Flags: ignoreversion

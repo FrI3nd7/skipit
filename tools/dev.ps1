@@ -28,7 +28,7 @@ try {
     robocopy 'build\windows\x64\runner\Release' $dev /MIR /XD core /XF dev-build /NFL /NDL /NJH /NJS /NP | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "Не удалось скопировать сборку в $dev (robocopy $LASTEXITCODE)" }
     New-Item -ItemType Directory -Force (Join-Path $dev 'core') | Out-Null
-    Copy-Item 'core\skipit-*.exe', 'core\LICENSE-*.txt' (Join-Path $dev 'core') -Force
+    Copy-Item 'core\skipit-*.exe', 'core\wintun.dll', 'core\LICENSE-*.txt' (Join-Path $dev 'core') -Force
     Set-Content (Join-Path $dev 'dev-build') 'Тестовая сборка SkipIt: данные и настройки отдельно от установленной программы.' -Encoding utf8
 
     Write-Host "Готово: $exe" -ForegroundColor Green

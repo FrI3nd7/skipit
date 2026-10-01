@@ -69,7 +69,8 @@ void main() {
       final provider = XrayConfig.buildFromProvider({
         'outbounds': [
           link.outbound,
-          {'tag': 'direct', 'protocol': 'freedom'},
+          // Устаревшее место параметра: SkipIt переносит его сам, чтобы ядро не ругалось в журнале.
+          {'tag': 'direct', 'protocol': 'freedom', 'settings': {'domainStrategy': 'UseIP'}},
         ],
         'routing': {
           'rules': [
@@ -108,7 +109,7 @@ void main() {
           final r = await Process.run(exe, ['run', '-test', '-c', file.path], stdoutEncoding: utf8, stderrEncoding: utf8);
           final out = '${r.stdout}\n${r.stderr}';
           expect(r.exitCode, 0, reason: out);
-          expect(out, isNot(contains('setting is deprecated')), reason: out);
+          expect(out, isNot(contains('deprecated')), reason: out);
         } finally {
           await dir.delete(recursive: true);
         }

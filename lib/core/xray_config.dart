@@ -56,6 +56,20 @@ class XrayConfig {
     return node;
   }
 
+  /// Переносит устаревшие параметры конфига провайдера на новое место, чтобы ядро не ругалось в журнале.
+  /// Сейчас это `domainStrategy` у выхода freedom: в Xray 26 он переехал из settings в sockopt.
+  static void _migrateDeprecated(Map<String, dynamic> cfg) {
+    for (final o in (cfg['outbounds'] as List? ?? const [])) {
+      if (o is! Map || o['protocol'] != 'freedom') continue;
+      final settings = o['settings'];
+      if (settings is! Map || !settings.containsKey('domainStrategy')) continue;
+      final strategy = settings.remove('domainStrategy');
+      final stream = (o['streamSettings'] ??= <String, dynamic>{}) as Map;
+      final sockopt = (stream['sockopt'] ??= <String, dynamic>{}) as Map;
+      sockopt['domainStrategy'] ??= strategy;
+    }
+  }
+
   /// Конфиг провайдера используется целиком; подменяются только локальные входы (наши порты),
   /// журнал и статистика — чтобы работали счётчики трафика и настройки портов.
   static Map<String, dynamic> buildFromProvider(Map<String, dynamic> provider, AppSettings settings) {
@@ -66,7 +80,6 @@ class XrayConfig {
       'destOverride': ['http', 'tls', 'quic'],
       'routeOnly': false,
     };
-    final verbose = settings.logLevel == 'debug' || settings.logLevel == 'info';
 
     // Входы SOCKS/HTTP провайдера заменяем своими (теги те же — правила провайдера на них ссылаются),
     // прочие входы (например, DNS) оставляем.
@@ -93,7 +106,8 @@ class XrayConfig {
       },
       ...keep,
     ];
-    cfg['log'] = {'loglevel': settings.logLevel, if (!verbose) 'access': 'none'};
+    // Журнал доступа включён всегда: из него строится список соединений в разделе «Логи».
+    cfg['log'] = {'loglevel': settings.logLevel};
     cfg['api'] = {
       'tag': 'api',
       'listen': '127.0.0.1:${settings.apiPort}',
@@ -108,6 +122,7 @@ class XrayConfig {
     cfg['policy'] = policy;
     // Метаданные клиента Xray не нужны.
     cfg.remove('remarks');
+    _migrateDeprecated(cfg);
     return dropRemovedOptions(cfg);
   }
 
@@ -154,7 +169,6 @@ class XrayConfig {
       'destOverride': ['http', 'tls', 'quic'],
       'routeOnly': false,
     };
-    final verbose = settings.logLevel == 'debug' || settings.logLevel == 'info';
 
     final proxy = dropRemovedOptions(deepCopyMap(server.outbound))..['tag'] = 'proxy';
 
@@ -180,7 +194,7 @@ class XrayConfig {
     rules.add({'network': 'tcp,udp', 'outboundTag': routing.globalProxy ? 'proxy' : 'direct'});
 
     return {
-      'log': {'loglevel': settings.logLevel, if (!verbose) 'access': 'none'},
+      'log': {'loglevel': settings.logLevel},
       'api': {
         'tag': 'api',
         'listen': '127.0.0.1:${settings.apiPort}',
@@ -301,7 +315,17 @@ class XrayConfig {
     final domains = <String>{...directDomains};
     _collectAddresses(outbounds, domains);
     outbounds.addAll([
-      {'tag': dnsOut, 'protocol': 'dns', 'settings': {'nonIPQuery': 'reject'}},
+      {
+        'tag': dnsOut,
+        'protocol': 'dns',
+        'settings': {
+          // На запросы адресов (A и AAAA) отвечает встроенный DNS Xray, остальные виды запросов отклоняются.
+          'rules': [
+            {'action': 'hijack', 'qType': '1,28'},
+            {'action': 'return', 'rCode': 5},
+          ],
+        },
+      },
       {
         'tag': direct,
         'protocol': 'freedom',

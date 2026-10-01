@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../core/core_manager.dart';
+import '../core/log_explain.dart';
 import '../core/paths.dart';
 import '../state/app_scope.dart';
 import 'flag_text.dart';
@@ -19,7 +20,7 @@ class LogsPage extends StatefulWidget {
 }
 
 /// Фильтр строк: события приложения отдельно от вывода ядер.
-enum _LogTab { all, app, xray, singbox }
+enum _LogTab { all, app, xray, singbox, connections }
 
 extension on _LogTab {
   String get label => switch (this) {
@@ -27,12 +28,15 @@ extension on _LogTab {
         _LogTab.app => 'Приложение',
         _LogTab.xray => 'Xray',
         _LogTab.singbox => 'sing-box',
+        _LogTab.connections => 'Соединения',
       };
 
   bool matches(String source) => switch (this) {
         _LogTab.all => true,
         _LogTab.xray => source == 'xray' || source == 'test',
         _LogTab.singbox => source == 'sing-box',
+        // Соединения — отдельный список (LogSession.connections), а не строки журнала.
+        _LogTab.connections => false,
         _LogTab.app => source != 'xray' && source != 'test' && source != 'sing-box',
       };
 }
@@ -82,7 +86,8 @@ class _LogsPageState extends State<LogsPage> {
         return Column(children: [
           PageHeader(
             'Логи',
-            subtitle: 'Журнал разбит по подключениям и хранится ${LogBuffer.keepDays} дней',
+            subtitle: 'Журнал разбит по подключениям и хранится ${LogBuffer.keepDays} дней. '
+                'Под строками ядра — пояснения простыми словами',
             actions: [
               GhostButton(
                 label: 'Папка',
@@ -152,28 +157,49 @@ class _LogsPageState extends State<LogsPage> {
       );
 }
 
-/// Слева: отрезки журнала по дням, свежие сверху.
-class _SessionList extends StatelessWidget {
+/// Слева: отрезки журнала по дням, свежие сверху. Каждый день сворачивается кликом по заголовку;
+/// по умолчанию развёрнут только сегодняшний.
+class _SessionList extends StatefulWidget {
   const _SessionList({required this.sessions, required this.selected, required this.onSelect});
   final List<LogSession> sessions;
   final LogSession? selected;
   final ValueChanged<LogSession> onSelect;
 
   @override
+  State<_SessionList> createState() => _SessionListState();
+}
+
+class _SessionListState extends State<_SessionList> {
+  /// Дни, которые пользователь развернул или свернул сам (ключ — дата). Остальные — по умолчанию.
+  final _opened = <String, bool>{};
+
+  static String _key(DateTime d) => '${d.year}-${d.month}-${d.day}';
+
+  @override
   Widget build(BuildContext context) {
-    final rows = <Widget>[];
-    DateTime? day;
-    for (final s in sessions.reversed) {
-      if (day == null || day.day != s.start.day || day.month != s.start.month || day.year != s.start.year) {
-        day = s.start;
-        rows.add(Padding(
-          padding: EdgeInsets.fromLTRB(16, rows.isEmpty ? 14 : 18, 16, 6),
-          child: Text(_dayLabel(day).toUpperCase(),
-              style: TextStyle(color: C.muted, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.4)),
-        ));
-      }
-      rows.add(_SessionTile(session: s, selected: identical(s, selected), onTap: () => onSelect(s)));
+    // Отрезки по дням, свежие сверху.
+    final days = <(DateTime, List<LogSession>)>[];
+    for (final s in widget.sessions.reversed) {
+      if (days.isEmpty || _key(days.last.$1) != _key(s.start)) days.add((s.start, []));
+      days.last.$2.add(s);
     }
+    final today = _key(DateTime.now());
+    final rows = <Widget>[
+      for (final (day, list) in days)
+        _DayGroup(
+          key: ValueKey(_key(day)),
+          label: _dayLabel(day),
+          count: list.length,
+          first: identical(list, days.first.$2),
+          open: _opened[_key(day)] ?? _key(day) == today,
+          onToggle: (open) => setState(() => _opened[_key(day)] = open),
+          selectedIndex: list.indexWhere((s) => identical(s, widget.selected)),
+          children: [
+            for (final s in list)
+              _SessionTile(session: s, selected: identical(s, widget.selected), onTap: () => widget.onSelect(s)),
+          ],
+        ),
+    ];
     // Свой контроллер плавной прокрутки: основной контроллер страницы занят списком строк справа.
     return SmoothScroll(
       builder: (context, controller) =>
@@ -182,11 +208,131 @@ class _SessionList extends StatelessWidget {
   }
 }
 
+/// Журналы одного дня: заголовок-переключатель и плавно раскрывающийся список отрезков.
+class _DayGroup extends StatefulWidget {
+  const _DayGroup({
+    super.key,
+    required this.label,
+    required this.count,
+    required this.first,
+    required this.open,
+    required this.onToggle,
+    required this.selectedIndex,
+    required this.children,
+  });
+  final String label;
+  final int count;
+  final bool first;
+  final bool open;
+  final ValueChanged<bool> onToggle;
+
+  /// Номер выбранного журнала в этом дне; -1 — выбран журнал другого дня.
+  final int selectedIndex;
+  final List<Widget> children;
+
+  @override
+  State<_DayGroup> createState() => _DayGroupState();
+}
+
+class _DayGroupState extends State<_DayGroup> {
+  /// Где подсветка стояла в последний раз: там она и гаснет, когда выбран журнал другого дня.
+  int _last = 0;
+
+  String get label => widget.label;
+  int get count => widget.count;
+  bool get first => widget.first;
+  bool get open => widget.open;
+  ValueChanged<bool> get onToggle => widget.onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final here = widget.selectedIndex >= 0;
+    if (here) _last = widget.selectedIndex;
+    return _build(context, here);
+  }
+
+  Widget _build(BuildContext context, bool here) => Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        // Заголовок дня — отдельная плашка: видно, что на неё можно нажать. Если выбранный журнал
+        // спрятан внутри свёрнутого дня, плашка отмечена оранжевым.
+        Hover(
+          builder: (context, hovered) {
+            final marked = here && !open;
+            final accent = marked ? C.orange : (hovered ? C.text : C.muted);
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => onToggle(!open),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 140),
+                margin: EdgeInsets.fromLTRB(8, first ? 8 : 4, 8, 4),
+                padding: const EdgeInsets.fromLTRB(10, 7, 6, 7),
+                decoration: BoxDecoration(
+                  color: hovered ? C.hover : C.surface2,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: marked ? C.orange.withValues(alpha: 0.55) : C.border),
+                ),
+                child: Row(children: [
+                  Expanded(
+                    child: Text(label.toUpperCase(),
+                        style: TextStyle(color: accent, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 1.4)),
+                  ),
+                  // Сколько журналов в этом дне.
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: (marked ? C.orange : C.muted).withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text('$count',
+                        style: TextStyle(color: marked ? C.orange : C.muted, fontSize: 11, fontWeight: FontWeight.w700)),
+                  ),
+                  const SizedBox(width: 4),
+                  AnimatedRotation(
+                    turns: open ? 0.5 : 0,
+                    duration: const Duration(milliseconds: 260),
+                    curve: Curves.easeOutCubic,
+                    child: Icon(Icons.expand_more_rounded, size: 18, color: hovered || marked ? C.orange : C.muted),
+                  ),
+                ]),
+              ),
+            );
+          },
+        ),
+        Reveal(
+          open: open,
+          // Подсветка выбранного журнала — одна на день и «скользит» к новому, как в боковом меню.
+          child: Stack(fit: StackFit.passthrough, children: [
+            AnimatedPositioned(
+              duration: const Duration(milliseconds: 240),
+              curve: Curves.easeOutCubic,
+              top: _last * _SessionTile.height,
+              left: 0,
+              right: 0,
+              height: _SessionTile.height,
+              child: IgnorePointer(
+                child: AnimatedOpacity(
+                  opacity: here ? 1 : 0,
+                  duration: const Duration(milliseconds: 160),
+                  child: Container(
+                    alignment: Alignment.centerLeft,
+                    color: C.orange.withValues(alpha: 0.10),
+                    // Оранжевая метка слева — как у выбранного сервера на главной.
+                    child: Container(width: 3, color: C.orange),
+                  ),
+                ),
+              ),
+            ),
+            Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: widget.children),
+          ]),
+        ),
+      ]);
+}
 class _SessionTile extends StatelessWidget {
   const _SessionTile({required this.session, required this.selected, required this.onTap});
   final LogSession session;
   final bool selected;
   final VoidCallback onTap;
+
+  static const height = 56.0;
 
   @override
   Widget build(BuildContext context) {
@@ -199,10 +345,10 @@ class _SessionTile extends StatelessWidget {
         onTap: onTap,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 140),
-          color: selected ? C.orange.withValues(alpha: 0.10) : (hovered ? C.hover : Colors.transparent),
+          // Фон и метку выбранного отрезка рисует скользящая подсветка дня (см. _DayGroup).
+          color: !selected && hovered ? C.hover : Colors.transparent,
           child: Row(children: [
-            // Оранжевая метка слева у выбранного отрезка — как у выбранного сервера на главной.
-            Container(width: 3, height: 56, color: selected ? C.orange : Colors.transparent),
+            const SizedBox(width: 3, height: height),
             const SizedBox(width: 11),
             if (!s.connection)
               _RoundIcon(Icons.more_horiz_rounded)
@@ -305,6 +451,8 @@ class _SessionView extends StatelessWidget {
     final s = session;
     final all = s.lines;
     final lines = (all ?? const <LogLine>[]).where((l) => tab.matches(l.source)).toList();
+    final conns = s.connections;
+    final showConns = tab == _LogTab.connections;
     final when = '${_dayLabel(s.start)}, ${_clock(s.start)}'
         '${s.live ? ' · идёт сейчас' : ' – ${_clock(s.end)} · ${_span(s.end.difference(s.start))}'}'
         '${s.detail.isNotEmpty ? ' · ${s.detail}' : ''}';
@@ -326,11 +474,13 @@ class _SessionView extends StatelessWidget {
           IconButton(
             tooltip: 'Скопировать',
             icon: Icon(Icons.copy_rounded, size: 18, color: C.muted),
-            onPressed: lines.isEmpty
+            onPressed: (showConns ? conns.isEmpty : lines.isEmpty)
                 ? null
                 : () async {
                     await Clipboard.setData(ClipboardData(
-                        text: lines.map((l) => '${l.time.toIso8601String()} [${l.source}] ${l.text}').join('\n')));
+                        text: showConns
+                            ? conns.map(_connLine).join('\n')
+                            : lines.map((l) => '${l.time.toIso8601String()} [${l.source}] ${l.text}').join('\n')));
                     onCopied();
                   },
           ),
@@ -346,19 +496,48 @@ class _SessionView extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(14, 0, 14, 12),
         child: Align(
           alignment: Alignment.centerLeft,
-          child: Segmented<_LogTab>(
-            value: tab,
-            items: {
-              for (final t in _LogTab.values)
-                t: '${t.label}  ${(all ?? const <LogLine>[]).where((l) => t.matches(l.source)).length}',
-            },
-            onChanged: onTab,
+          // В узком окне пять вкладок не помещаются — переключатель слегка уменьшается.
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Segmented<_LogTab>(
+              value: tab,
+              items: {
+                for (final t in _LogTab.values)
+                  t: '${t.label}  ${t == _LogTab.connections ? conns.length : (all ?? const <LogLine>[]).where((l) => t.matches(l.source)).length}',
+              },
+              onChanged: onTab,
+            ),
           ),
         ),
       ),
       Divider(height: 1, color: C.border),
       Expanded(
-        child: all == null
+        child: showConns
+            ? (conns.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(24),
+                      child: Text(
+                        s.live
+                            ? 'Соединений пока нет. Здесь появится, какая программа или сайт куда идёт: через VPN, напрямую или блокируется'
+                            : 'Список соединений не сохраняется на диск — он виден только до закрытия программы',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: C.muted),
+                      ),
+                    ),
+                  )
+                : SelectionArea(
+                    child: ListView.builder(
+                      key: ValueKey('${s.id}-connections'),
+                      primary: true,
+                      reverse: true,
+                      padding: const EdgeInsets.all(14),
+                      itemCount: conns.length,
+                      itemBuilder: (_, i) => _ConnText(conns[conns.length - 1 - i]),
+                    ),
+                  ))
+            : all == null
             ? const Center(
                 child: Spinner(size: 24))
             : lines.isEmpty
@@ -386,6 +565,7 @@ class _LineText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = line.time;
+    final hint = LogExplain.of(line.source, line.text);
     final color = switch (line.level) {
       2 => C.red,
       1 => C.isDark ? C.orangeLight : C.orange,
@@ -396,6 +576,61 @@ class _LineText extends StatelessWidget {
         TextSpan(text: '${_two(t.hour)}:${_two(t.minute)}:${_two(t.second)} ', style: TextStyle(color: C.muted)),
         TextSpan(text: '[${line.source}] ', style: TextStyle(color: C.cyan)),
         TextSpan(text: line.text, style: TextStyle(color: color)),
+        if (hint != null)
+          TextSpan(
+            text: '\n         ↳ $hint',
+            style: TextStyle(color: C.muted, fontFamily: 'Segoe UI', fontSize: 12),
+          ),
+      ]),
+      style: const TextStyle(fontFamily: 'Consolas', fontSize: 12, height: 1.5),
+    );
+  }
+}
+
+String _routeLabel(ConnRoute r) => switch (r) {
+      ConnRoute.proxy => 'через VPN',
+      ConnRoute.direct => 'напрямую',
+      ConnRoute.block => 'заблокировано',
+      ConnRoute.dns => 'DNS',
+    };
+
+/// Откуда соединение попало в ядро — по тегу входа.
+String _inboundLabel(String tag) => switch (tag) {
+      'socks' => 'SOCKS-порт',
+      'http' => 'HTTP-прокси',
+      'skipit-tun' => 'TUN',
+      _ => tag,
+    };
+
+/// Соединение одной строкой — для копирования.
+String _connLine(ConnEntry c) => '${c.time.toIso8601String()} ${c.network} ${c.host}:${c.port} → ${_routeLabel(c.route)}'
+    '${c.outbound.isEmpty ? '' : ' (${c.outbound})'} · вход: ${_inboundLabel(c.inbound)}';
+
+/// Строка списка соединений: куда шли → каким путём отправлено.
+class _ConnText extends StatelessWidget {
+  const _ConnText(this.conn);
+  final ConnEntry conn;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = conn;
+    final t = c.time;
+    final color = switch (c.route) {
+      ConnRoute.proxy => C.isDark ? C.orangeLight : C.orange,
+      ConnRoute.direct => C.green,
+      ConnRoute.block => C.red,
+      ConnRoute.dns => C.muted,
+    };
+    return Text.rich(
+      TextSpan(children: [
+        TextSpan(text: '${_two(t.hour)}:${_two(t.minute)}:${_two(t.second)} ', style: TextStyle(color: C.muted)),
+        TextSpan(text: '${c.host}:${c.port}', style: TextStyle(color: C.text)),
+        if (c.network == 'udp') TextSpan(text: ' udp', style: TextStyle(color: C.muted)),
+        TextSpan(text: ' → ${_routeLabel(c.route)}', style: TextStyle(color: color, fontWeight: FontWeight.w700)),
+        TextSpan(
+          text: '${c.outbound.isEmpty ? '' : ' (${c.outbound})'} · вход: ${_inboundLabel(c.inbound)}',
+          style: TextStyle(color: C.muted),
+        ),
       ]),
       style: const TextStyle(fontFamily: 'Consolas', fontSize: 12, height: 1.5),
     );

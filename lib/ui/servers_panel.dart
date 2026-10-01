@@ -101,7 +101,7 @@ class _ServersPanelState extends State<ServersPanel> {
       ),
       const SizedBox(width: 6),
       _IconAction(
-        tooltip: 'Проверить задержку всех',
+        tooltip: 'Проверить задержку (пинг) всех серверов',
         icon: Icons.speed_rounded,
         busy: state.pinging,
         onTap: () => state.ping(state.servers),
@@ -350,7 +350,9 @@ class _GroupCardState extends State<_GroupCard> {
                     onTap: () => state.updateSubscription(sub),
                   ),
                 _IconAction(
-                  tooltip: 'Проверить задержку',
+                  tooltip: sub != null
+                      ? 'Проверить задержку (пинг) серверов этой подписки'
+                      : 'Проверить задержку (пинг) серверов этого списка',
                   icon: Icons.speed_rounded,
                   busy: state.pinging,
                   onTap: () => state.ping(widget.servers),
@@ -476,7 +478,7 @@ class _ServerRow extends StatelessWidget {
 
   Future<void> _menu(BuildContext context, AppState state, Offset? at) async {
     final v = await showAppMenu<String>(context, at: at, items: [
-      const AppMenuItem('ping', 'Проверить задержку', icon: Icons.speed_rounded),
+      const AppMenuItem('ping', 'Проверить задержку (пинг)', icon: Icons.speed_rounded),
       const AppMenuItem('json', 'Показать JSON', icon: Icons.data_object_rounded),
       if (server.subscriptionId == null) ...const [
         AppMenuItem.divider(),

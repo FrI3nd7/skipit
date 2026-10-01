@@ -42,7 +42,8 @@ function Get-CoreArchive($name, $url, $sha256) {
 
 $xrayVersion = $cores.xray.version -replace '^v', ''
 $xrayExe = Join-Path $core 'skipit-xray.exe'
-if ((Get-InstalledVersion $xrayExe 'Xray ([\d.]+)') -eq $xrayVersion -and (Test-Path (Join-Path $core 'LICENSE-Xray.txt'))) {
+$wintun = Join-Path $core 'wintun.dll'
+if ((Get-InstalledVersion $xrayExe 'Xray ([\d.]+)') -eq $xrayVersion -and (Test-Path (Join-Path $core 'LICENSE-Xray.txt')) -and (Test-Path $wintun)) {
     Write-Host "Xray-core $xrayVersion уже на месте"
 } else {
     Write-Host "Xray-core $xrayVersion..."
@@ -51,6 +52,8 @@ if ((Get-InstalledVersion $xrayExe 'Xray ([\d.]+)') -eq $xrayVersion -and (Test-
     Copy-Item (Join-Path $dir 'xray.exe') $xrayExe -Force
     # Текст лицензии (MPL-2.0) кладём рядом с ядром.
     Copy-Item (Join-Path $dir 'LICENSE') (Join-Path $core 'LICENSE-Xray.txt') -Force
+    # Драйвер адаптера из того же архива: нужен Xray, когда он сам поднимает TUN (в sing-box драйвер встроен).
+    Copy-Item (Join-Path $dir 'wintun.dll') $wintun -Force
 }
 
 $sbVersion = $cores.'sing-box'.version -replace '^v', ''
