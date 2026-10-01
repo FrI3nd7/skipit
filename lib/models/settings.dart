@@ -3,7 +3,7 @@ import '../core/windows.dart';
 import '../version.dart';
 
 enum ConnectionMode {
-  /// Виртуальный адаптер (sing-box TUN): весь трафик системы, нужны права администратора.
+  /// Виртуальный адаптер (TUN, см. [TunCore]): весь трафик системы, нужны права администратора.
   tun,
 
   /// TUN + системный прокси: браузеры идут через HTTP-порт (точнее маршрутизация по доменам),
@@ -27,6 +27,15 @@ extension ConnectionModeLabel on ConnectionMode {
       };
 }
 
+/// Чем поднимается TUN-адаптер.
+enum TunCore {
+  /// sing-box держит адаптер и отдаёт трафик в SOCKS-порт Xray.
+  singbox,
+
+  /// Адаптер поднимает сам Xray, без sing-box (пробный режим).
+  xray,
+}
+
 enum PingType { tcp, realDelay }
 
 enum AppTheme { dark, light, system }
@@ -36,6 +45,7 @@ enum UpdateChannel { stable, beta }
 
 class AppSettings {
   ConnectionMode mode = ConnectionMode.mixed;
+  TunCore tunCore = TunCore.singbox;
   int socksPort = 10808;
   int httpPort = 10809;
   int apiPort = 10813;
@@ -78,6 +88,7 @@ class AppSettings {
         'mode': mode.name,
         // Метка: режим уже выбран с «Смешанным» по умолчанию (см. fromJson).
         'mixedDefault': true,
+        'tunCore': tunCore.name,
         'socksPort': socksPort,
         'httpPort': httpPort,
         'apiPort': apiPort,
@@ -115,6 +126,7 @@ class AppSettings {
     s.mode = ConnectionMode.values.asNameMap()[j['mode']] ?? s.mode;
     // Раньше по умолчанию был TUN — один раз переводим такие настройки на «Смешанный».
     if (j['mixedDefault'] != true && s.mode == ConnectionMode.tun) s.mode = ConnectionMode.mixed;
+    s.tunCore = TunCore.values.asNameMap()[j['tunCore']] ?? s.tunCore;
     s.socksPort = asInt(j['socksPort']) ?? s.socksPort;
     s.httpPort = asInt(j['httpPort']) ?? s.httpPort;
     s.apiPort = asInt(j['apiPort']) ?? s.apiPort;

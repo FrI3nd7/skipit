@@ -6,6 +6,7 @@ import '../core/util.dart';
 import '../models/settings.dart';
 import '../state/app_scope.dart';
 import '../state/app_state.dart';
+import 'app_menu.dart';
 import 'flag_text.dart';
 import 'servers_panel.dart';
 import 'shell.dart';
@@ -111,6 +112,14 @@ class _HomePageState extends State<HomePage> {
           style: TextStyle(color: C.muted, fontSize: 12),
         ),
       ),
+      // Чем поднимать адаптер — только в режимах с TUN; строка плавно выезжает и прячется.
+      Reveal(
+        open: state.usesTun,
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 4),
+          child: _TunCorePicker(value: state.settings.tunCore, onChanged: state.setTunCore),
+        ),
+      ),
       const SizedBox(height: 8),
       SizedBox(
         width: 360,
@@ -162,6 +171,60 @@ class _HomePageState extends State<HomePage> {
             ),
     );
   }
+}
+
+/// Выбор ядра, которое поднимает TUN-адаптер: небольшая кнопка с выпадающим меню.
+class _TunCorePicker extends StatelessWidget {
+  const _TunCorePicker({required this.value, required this.onChanged});
+  final TunCore value;
+  final ValueChanged<TunCore> onChanged;
+
+  static const _coreStyle = TextStyle(fontSize: 12.5, fontWeight: FontWeight.w700);
+
+  @override
+  Widget build(BuildContext context) => Tooltip(
+        message: 'Чем поднимать TUN-адаптер. Xray — пробный режим: без sing-box, защита от утечек ещё проверяется',
+        waitDuration: const Duration(milliseconds: 500),
+        child: Hover(
+          builder: (context, hovered) => GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () async {
+              final picked = await showAppMenu<TunCore>(context, matchWidth: true, items: [
+                AppMenuItem(TunCore.singbox, 'sing-box', checked: value == TunCore.singbox),
+                AppMenuItem(TunCore.xray, 'Xray', hint: 'пробный', checked: value == TunCore.xray),
+              ]);
+              if (picked != null) onChanged(picked);
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 140),
+              padding: const EdgeInsets.fromLTRB(12, 6, 8, 6),
+              decoration: BoxDecoration(
+                color: hovered ? C.surface2 : C.surface,
+                borderRadius: BorderRadius.circular(11),
+                border: Border.all(color: hovered ? C.orange.withValues(alpha: 0.5) : C.border),
+              ),
+              child: Row(mainAxisSize: MainAxisSize.min, children: [
+                Text('Ядро TUN', style: TextStyle(color: C.muted, fontSize: 12)),
+                const SizedBox(width: 8),
+                // Сначала гаснет старое название, затем проявляется новое; ширина кнопки меняется
+                // всё это время — так длинная надпись не обрезается на глазах.
+                AnimatedCrossFade(
+                  duration: const Duration(milliseconds: 320),
+                  sizeCurve: Curves.easeInOutCubic,
+                  firstCurve: const Interval(0.55, 1),
+                  secondCurve: const Interval(0.55, 1),
+                  alignment: Alignment.centerLeft,
+                  crossFadeState: value == TunCore.xray ? CrossFadeState.showSecond : CrossFadeState.showFirst,
+                  firstChild: const Text('sing-box', maxLines: 1, softWrap: false, style: _coreStyle),
+                  secondChild: const Text('Xray · пробный', maxLines: 1, softWrap: false, style: _coreStyle),
+                ),
+                const SizedBox(width: 4),
+                Icon(Icons.expand_more_rounded, size: 18, color: hovered ? C.orange : C.muted),
+              ]),
+            ),
+          ),
+        ),
+      );
 }
 
 /// Какая маршрутизация сейчас действует; клик открывает раздел «Маршрутизация».

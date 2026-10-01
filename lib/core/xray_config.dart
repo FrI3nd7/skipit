@@ -1,9 +1,11 @@
 import 'dart:convert';
 import 'dart:io';
 
+import '../models/app_rules.dart';
 import '../models/routing.dart';
 import '../models/server.dart';
 import '../models/settings.dart';
+import 'paths.dart';
 import 'util.dart';
 
 class XrayConfig {
@@ -229,6 +231,128 @@ class XrayConfig {
       ],
       'routing': {'domainStrategy': routing.domainStrategy, 'rules': rules},
     };
+  }
+
+  static const tunTag = 'skipit-tun';
+  static const _tunGateway = ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'];
+
+  /// DNS адаптера — сосед шлюза в подсети TUN: запросы к нему попадают в адаптер, там их
+  /// перехватывает правило, и отвечает встроенный DNS Xray.
+  static const _tunDns = '172.19.0.2';
+
+  /// Адреса VPN-серверов резолвим напрямую, иначе Xray не сможет к ним подключиться.
+  static const _bootstrapDns = '77.88.8.8';
+  static const _privateNets = [
+    '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '127.0.0.0/8', '224.0.0.0/4',
+    '255.255.255.255/32', 'fc00::/7', 'fe80::/10', 'ff00::/8',
+  ];
+
+  static void _collectAddresses(Object? node, Set<String> out) {
+    if (node is Map) {
+      final a = node['address'];
+      if (a is String && a.isNotEmpty && InternetAddress.tryParse(a) == null) out.add(a);
+      node.values.forEach((v) => _collectAddresses(v, out));
+    } else if (node is List) {
+      node.forEach((v) => _collectAddresses(v, out));
+    }
+  }
+
+  /// Режим «TUN на ядре Xray»: адаптер поднимает сам Xray, sing-box не запускается.
+  /// Дописывает в готовый конфиг (свой или провайдера) вход TUN, перехват DNS и правила по приложениям —
+  /// то же, что в обычном режиме делает [SingboxConfig]. Свои выходы и правила названы с приставкой
+  /// `skipit-`, чтобы не совпасть с тегами провайдера.
+  static void addTun(
+    Map<String, dynamic> cfg, {
+    required AppSettings settings,
+    required AppRules apps,
+    List<String> directDomains = const [],
+  }) {
+    const direct = 'skipit-direct', block = 'skipit-block', dnsOut = 'skipit-dns';
+    final inbound = [tunTag];
+
+    final tun = {
+      'tag': tunTag,
+      'protocol': 'tun',
+      'settings': {
+        'name': AppPaths.appName,
+        'desc': AppPaths.appName,
+        'mtu': settings.mtu,
+        // IPv6-адрес и маршрут есть всегда: иначе IPv6-трафик шёл бы мимо туннеля (утечка IP).
+        // При выключенном IPv6 он блокируется правилом ниже.
+        'gateway': _tunGateway,
+        'dns': [_tunDns],
+        'autoSystemRoutingTable': ['0.0.0.0/0', '::/0'],
+        // Сам Xray ходит через настоящий сетевой адаптер — иначе получится петля.
+        'autoOutboundsInterface': 'auto',
+        // DNS-запросы программ мимо адаптера блокируются фильтром Windows.
+        'autoSystemWfpBlockLeak': ['dns'],
+      },
+      'sniffing': {
+        'enabled': settings.sniffing,
+        'destOverride': ['http', 'tls', 'quic'],
+        'routeOnly': false,
+      },
+    };
+    cfg['inbounds'] = [...(cfg['inbounds'] as List? ?? const []), tun];
+
+    final outbounds = [...(cfg['outbounds'] as List)];
+    final first = outbounds.first as Map;
+    final defaultTag = (first['tag'] ??= 'proxy') as String;
+    final domains = <String>{...directDomains};
+    _collectAddresses(outbounds, domains);
+    outbounds.addAll([
+      {'tag': dnsOut, 'protocol': 'dns', 'settings': {'nonIPQuery': 'reject'}},
+      {
+        'tag': direct,
+        'protocol': 'freedom',
+        'streamSettings': {
+          'sockopt': {'domainStrategy': settings.ipv6 ? 'UseIP' : 'UseIPv4'},
+        },
+      },
+      {'tag': block, 'protocol': 'blackhole'},
+    ]);
+    cfg['outbounds'] = outbounds;
+
+    final dns = (cfg['dns'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final servers = [...(dns['servers'] as List? ?? const [])];
+    if (servers.isEmpty) servers.add('1.1.1.1');
+    if (domains.isNotEmpty) {
+      servers.add({'address': _bootstrapDns, 'domains': [for (final d in domains) 'full:$d'], 'skipFallback': true});
+    }
+    dns['servers'] = servers;
+    cfg['dns'] = dns;
+
+    final routing = (cfg['routing'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final rules = [...(routing['rules'] as List? ?? const [])];
+    final own = <Map<String, dynamic>>[
+      {'inboundTag': inbound, 'port': '53', 'outboundTag': dnsOut},
+      {'ip': [_bootstrapDns], 'port': '53', 'outboundTag': direct},
+      {'inboundTag': inbound, 'ip': _privateNets, 'outboundTag': direct},
+      if (!settings.ipv6) {'inboundTag': inbound, 'ip': ['::/0'], 'outboundTag': block},
+    ];
+
+    // Запись списка — имя процесса, путь или папка с прямыми слэшами: Xray понимает их в том же виде.
+    final listed = apps.enabledMatches;
+    switch (apps.mode) {
+      case AppRoutingMode.off:
+        break;
+      case AppRoutingMode.allExcept:
+        if (listed.isNotEmpty) own.add({'inboundTag': inbound, 'process': listed, 'outboundTag': direct});
+      case AppRoutingMode.onlySelected:
+        // Правила «все, кроме списка» в Xray нет. Поэтому для выбранных программ повторяются обычные
+        // правила, а всё остальное из адаптера идёт напрямую.
+        if (listed.isNotEmpty) {
+          for (final r in rules) {
+            if (r is Map && r['inboundTag'] == null && r['process'] == null) {
+              own.add({...r.cast<String, dynamic>(), 'inboundTag': inbound, 'process': listed}..remove('ruleTag'));
+            }
+          }
+          own.add({'inboundTag': inbound, 'process': listed, 'outboundTag': defaultTag});
+        }
+        own.add({'inboundTag': inbound, 'outboundTag': direct});
+    }
+    routing['rules'] = [...own, ...rules];
+    cfg['routing'] = routing;
   }
 
   /// Конфиг для проверки задержки: на каждый сервер свой HTTP-inbound на своём порту.

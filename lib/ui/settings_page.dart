@@ -149,6 +149,21 @@ class SettingsPage extends StatelessWidget {
               (v) => s.autoReconnect = v),
         ]),
         _Section('Подключение', [
+          _Row(
+            title: 'Ядро для TUN',
+            subtitle: s.tunCore == TunCore.xray
+                ? 'Xray — пробный режим: адаптер поднимает само ядро Xray, без sing-box. '
+                    'Защита от утечек в нём ещё проверяется'
+                : 'sing-box — обычный режим. Действует в режимах TUN и «Смешанный»',
+            trailing: Segmented<TunCore>(
+              value: s.tunCore,
+              items: const {TunCore.singbox: 'sing-box', TunCore.xray: 'Xray (пробный)'},
+              onChanged: (v) {
+                s.tunCore = v;
+                state.changed();
+              },
+            ),
+          ),
           toggle('Автовыбор сервера', 'Перед подключением выбирать самый быстрый сервер подписки', s.autoSelect,
               (v) => s.autoSelect = v),
           toggle('Разрешить подключения из локальной сети', 'Раздавать прокси другим устройствам (0.0.0.0)', s.allowLan,

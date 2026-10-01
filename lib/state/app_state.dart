@@ -300,6 +300,9 @@ class AppState extends ChangeNotifier {
   }
 
   bool get usesTun => settings.mode == ConnectionMode.tun || settings.mode == ConnectionMode.mixed;
+
+  /// TUN поднимает само ядро Xray, sing-box не запускается (пробный режим).
+  bool get xrayTun => usesTun && settings.tunCore == TunCore.xray;
   bool get isConnected => status == ConnStatus.connected;
   bool get isBusy => status == ConnStatus.connecting || status == ConnStatus.disconnecting;
 
@@ -549,6 +552,14 @@ class AppState extends ChangeNotifier {
     if (isConnected) await reconnect();
   }
 
+  /// Смена ядра TUN с главной: как и смена режима, сразу переподключает, если TUN сейчас работает.
+  Future<void> setTunCore(TunCore core) async {
+    if (settings.tunCore == core) return;
+    settings.tunCore = core;
+    changed();
+    if (isConnected && usesTun) await reconnect();
+  }
+
   Future<void> toggle({bool ignoreOtherVpn = false}) async {
     if (isBusy) return;
     isConnected ? await disconnect() : await connect(ignoreOtherVpn: ignoreOtherVpn);
@@ -627,7 +638,7 @@ class AppState extends ChangeNotifier {
     status = ConnStatus.connecting;
     notifyListeners();
     // Каждое подключение — отдельный отрезок журнала (раздел «Логи»).
-    log.startSession(selectedServer?.name ?? 'Сервер не выбран', detail: settings.mode.label);
+    log.startSession(selectedServer?.name ?? 'Сервер не выбран', detail: xrayTun ? '${settings.mode.label} · Xray' : settings.mode.label);
     log.add('app', 'Подключение…');
     try {
       if (usesTun && !isAdmin) throw NeedAdminException();
@@ -671,6 +682,16 @@ class AppState extends ChangeNotifier {
       _session = session;
 
       final config = XrayConfig.build(server: server, routing: routing, settings: session);
+      final xrayTun = this.xrayTun;
+      if (xrayTun) {
+        final domestic = Uri.tryParse(routing.domesticDnsAddress);
+        XrayConfig.addTun(config, settings: session, apps: appRules, directDomains: [
+          if (domestic != null && domestic.scheme == 'https' && InternetAddress.tryParse(domestic.host) == null)
+            domestic.host,
+        ]);
+        _appliedAppRules = appRules.signature;
+        await _tunCleanup;
+      }
       await File(AppPaths.configFile).writeAsString(const JsonEncoder.withIndent('  ').convert(config));
       await _xray.start(AppPaths.xrayExe, ['run', '-c', AppPaths.configFile],
           env: {'XRAY_LOCATION_ASSET': AppPaths.geoDir.path});
@@ -684,7 +705,17 @@ class AppState extends ChangeNotifier {
       await Future.delayed(const Duration(milliseconds: 250));
       if (!_xray.running) throw CoreException('Xray завершился сразу после запуска:\n${log.tail(8, source: 'xray')}');
 
-      if (usesTun) {
+      if (xrayTun) {
+        // Адаптер поднимает сам Xray: ждём, пока трафик пойдёт через него.
+        final deadline = DateTime.now().add(Duration(seconds: ignoreOtherVpn ? 5 : 12));
+        while (_xray.running && !WinSys.ownTunActive() && DateTime.now().isBefore(deadline)) {
+          await Future.delayed(const Duration(milliseconds: 100));
+        }
+        if (!_xray.running || (!ignoreOtherVpn && !WinSys.ownTunActive())) {
+          tunFailed = true;
+          throw CoreException(_tunFailure('xray'));
+        }
+      } else if (usesTun) {
         final domains = <String>[
           if (InternetAddress.tryParse(server.address) == null && server.address.isNotEmpty) server.address,
         ];
@@ -707,7 +738,7 @@ class AppState extends ChangeNotifier {
         }
         if (!_singbox.running || stuck() || (!ignoreOtherVpn && !WinSys.ownTunActive())) {
           tunFailed = true;
-          throw CoreException(_tunFailure());
+          throw CoreException(_tunFailure('sing-box'));
         }
       }
       if (settings.mode == ConnectionMode.systemProxy || settings.mode == ConnectionMode.mixed) {
@@ -755,9 +786,9 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Понятное объяснение, почему не поднялся TUN, по последним строкам sing-box.
-  String _tunFailure() {
-    final tail = log.tail(8, source: 'sing-box');
+  /// Понятное объяснение, почему не поднялся TUN, по последним строкам ядра, которое его поднимает.
+  String _tunFailure(String core) {
+    final tail = log.tail(8, source: core);
     final lower = tail.toLowerCase();
     if (_adapterTrouble(lower) || tail.trim().isEmpty) {
       return 'Windows не смогла включить сетевой адаптер VPN — это сбой на стороне Windows, не настроек. '

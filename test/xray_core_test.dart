@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:skipit/core/link_parser.dart';
 import 'package:skipit/core/xray_config.dart';
+import 'package:skipit/models/app_rules.dart';
 import 'package:skipit/models/routing.dart';
 import 'package:skipit/models/settings.dart';
 
@@ -53,6 +54,67 @@ void main() {
     'Hysteria 2': 'hysteria2://password@example.com:443?sni=example.com#a',
     'Hysteria 2 без проверки сертификата': 'hy2://password@example.com:443?sni=example.com&insecure=1#a',
   };
+
+  // TUN на ядре Xray: вход TUN, перехват DNS и правила по приложениям — во всех режимах списка,
+  // для обычной ссылки и для готового конфига провайдера.
+  for (final mode in AppRoutingMode.values) {
+    test('Xray принимает конфиг TUN: приложения — ${mode.name}', () async {
+      final apps = AppRules(mode: mode, entries: [
+        AppEntry(match: 'Telegram', label: 'Telegram'),
+        AppEntry(match: 'C:/Apps/Steam/steam.exe', label: 'Steam'),
+        AppEntry(match: 'C:/Games/', label: 'Игры'),
+      ]);
+      final link = LinkParser.parseLink(links['VLESS + REALITY + Vision']!)!;
+      final own = XrayConfig.build(server: link, routing: RoutingProfile.global(), settings: AppSettings());
+      final provider = XrayConfig.buildFromProvider({
+        'outbounds': [
+          link.outbound,
+          {'tag': 'direct', 'protocol': 'freedom'},
+        ],
+        'routing': {
+          'rules': [
+            {'ruleTag': 'ru', 'domain': ['domain:ru'], 'outboundTag': 'direct'},
+          ],
+        },
+      }, AppSettings());
+
+      for (final config in [own, provider]) {
+        XrayConfig.addTun(config, settings: AppSettings()..ipv6 = false, apps: apps);
+        final rules = (config['routing'] as Map)['rules'] as List;
+        rules.removeWhere((r) => jsonEncode(r).contains(RegExp('geoip:|geosite:')));
+        // DNS из адаптера перехватывается первым правилом, IPv6 при выключенной настройке блокируется.
+        expect(rules.first['outboundTag'], 'skipit-dns');
+        expect(rules.any((r) => jsonEncode(r['ip']) == '["::/0"]' && r['outboundTag'] == 'skipit-block'), isTrue);
+        // Адрес сервера резолвится напрямую — иначе ядро не смогло бы к нему подключиться.
+        expect(jsonEncode((config['dns'] as Map)['servers']), contains('full:example.com'));
+        final byProcess = rules.where((r) => r['process'] != null).toList();
+        switch (mode) {
+          case AppRoutingMode.off:
+            expect(byProcess, isEmpty);
+          case AppRoutingMode.allExcept:
+            expect(byProcess.single['outboundTag'], 'skipit-direct');
+          case AppRoutingMode.onlySelected:
+            // После правил для выбранных программ остальной трафик адаптера идёт напрямую.
+            final rest = rules.indexWhere((r) => r['process'] == null && r['ip'] == null && r['port'] == null);
+            expect(rules[rest]['outboundTag'], 'skipit-direct');
+            expect(rules[rest]['inboundTag'], [XrayConfig.tunTag]);
+            expect(rules.lastIndexOf(byProcess.last), rest - 1);
+        }
+
+        final dir = await Directory.systemTemp.createTemp('skipit-xray-test');
+        try {
+          final file = File('${dir.path}\\config.json');
+          await file.writeAsString(jsonEncode(config));
+          final r = await Process.run(exe, ['run', '-test', '-c', file.path], stdoutEncoding: utf8, stderrEncoding: utf8);
+          final out = '${r.stdout}\n${r.stderr}';
+          expect(r.exitCode, 0, reason: out);
+          expect(out, isNot(contains('setting is deprecated')), reason: out);
+        } finally {
+          await dir.delete(recursive: true);
+        }
+      }
+    }, skip: hasCore ? false : 'ядро Xray не скачано (tools\\setup.ps1)');
+  }
 
   for (final entry in links.entries) {
     test('Xray принимает конфиг: ${entry.key}', () async {
