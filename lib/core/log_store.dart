@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -338,8 +339,15 @@ class LogBuffer extends ChangeNotifier {
     if (list == null) return;
     list.add(c);
     if (list.length > maxConnections) list.removeRange(0, list.length - maxConnections);
-    notifyListeners();
+    // Соединений бывают сотни в секунду (загрузки, торренты): окно журнала обновляется не на каждое,
+    // а не чаще четырёх раз в секунду — иначе оно перерисовывалось бы без остановки.
+    _connNotify ??= Timer(const Duration(milliseconds: 250), () {
+      _connNotify = null;
+      notifyListeners();
+    });
   }
+
+  Timer? _connNotify;
 
   /// Закрывает файл текущего отрезка (выход из программы).
   void close() => _finish();

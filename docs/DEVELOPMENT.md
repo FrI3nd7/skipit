@@ -2,8 +2,10 @@
 
 Этот файл — для разработчиков. Пользователям достаточно установщика из Releases.
 
-Программа написана на Flutter (Windows), протоколы обрабатывает **Xray-core**, режим TUN и правила
-по приложениям — **sing-box**. Ядра кладутся в установщик при сборке.
+Программа написана на Flutter (Windows), протоколы обрабатывает **Xray-core**. Режим TUN и правила
+по приложениям — на выбор пользователя: **sing-box** (по умолчанию, `lib\core\singbox_config.dart`) или сам
+Xray (`XrayConfig.addTun`). Ядра и `wintun.dll` (драйвер адаптера для Xray, берётся из его же архива)
+кладутся в установщик при сборке.
 
 ## Сборка из исходников
 
@@ -12,11 +14,11 @@ Visual Studio 2022 с нагрузкой «Разработка классиче
 [Inno Setup](https://jrsoftware.org/isdl.php).
 
 ```
-powershell -ExecutionPolicy Bypass -File tools\build.ps1 -Version 1.0.2a     # программа + установщик
+powershell -ExecutionPolicy Bypass -File tools\build.ps1 -Version 1.0.3a     # программа + установщик
 powershell -ExecutionPolicy Bypass -File tools\dev.ps1                       # тестовая копия «SkipIt Dev»
 ```
 
-Результат сборки — `build\installer\SkipIt-Setup-Windows-1.0.2a.exe` и файл `.sha256` с его контрольной суммой.
+Результат сборки — `build\installer\SkipIt-Setup-Windows-1.0.3a.exe` и файл `.sha256` с его контрольной суммой.
 Тесты: `flutter test`. Иконка пересобирается скриптом `tools\make_icon.ps1`.
 
 ### Тестовая копия
@@ -37,7 +39,7 @@ powershell -ExecutionPolicy Bypass -File tools\dev.ps1                       # �
 
 `version` — тег релиза ядра на GitHub, `sha256` — контрольная сумма zip-архива для Windows x64 со страницы
 релиза (пустая строка — не проверять). Чтобы обновить ядро: поменяйте оба значения, запустите
-`flutter test` (тест `xray_core_test.dart` проверит на новом ядре конфиги для всех видов ссылок) и
+`flutter test` (тест `xray_core_test.dart` проверит на новом ядре конфиги для всех видов ссылок и для TUN) и
 выпустите новую версию SkipIt. У Xray свежие версии выходят с пометкой pre-release — это обычная
 практика авторов, брать нужно их.
 

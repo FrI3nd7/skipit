@@ -614,8 +614,11 @@ String _inboundLabel(String tag) => switch (tag) {
       _ => tag,
     };
 
+/// Куда шло соединение: сайт и порт (порт не показывается, если ядро его не сообщило).
+String _target(ConnEntry c) => c.port > 0 ? '${c.host}:${c.port}' : c.host;
+
 /// Соединение одной строкой — для копирования.
-String _connLine(ConnEntry c) => '${c.time.toIso8601String()} ${c.network} ${c.host}:${c.port} → ${_routeLabel(c.route)}'
+String _connLine(ConnEntry c) => '${c.time.toIso8601String()} ${c.network} ${_target(c)} → ${_routeLabel(c.route)}'
     '${c.outbound.isEmpty ? '' : ' (${c.outbound})'} · вход: ${_inboundLabel(c.inbound)}';
 
 /// Строка списка соединений: куда шли → каким путём отправлено.
@@ -636,7 +639,7 @@ class _ConnText extends StatelessWidget {
     return Text.rich(
       TextSpan(children: [
         TextSpan(text: '${_two(t.hour)}:${_two(t.minute)}:${_two(t.second)} ', style: TextStyle(color: C.muted)),
-        TextSpan(text: '${c.host}:${c.port}', style: TextStyle(color: C.text)),
+        TextSpan(text: _target(c), style: TextStyle(color: C.text)),
         if (c.network == 'udp') TextSpan(text: ' udp', style: TextStyle(color: C.muted)),
         TextSpan(text: ' → ${_routeLabel(c.route)}', style: TextStyle(color: color, fontWeight: FontWeight.w700)),
         TextSpan(
