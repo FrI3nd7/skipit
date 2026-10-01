@@ -282,9 +282,14 @@ class AppSwitch extends StatelessWidget {
 /// Плавное раскрытие и сворачивание блока: высота меняется, а содержимое проявляется и тает.
 /// При сворачивании содержимое остаётся на месте до конца анимации, а не исчезает сразу.
 class Reveal extends StatefulWidget {
-  const Reveal({super.key, required this.open, required this.child});
+  const Reveal({super.key, required this.open, required this.child, this.extent});
   final bool open;
   final Widget child;
+
+  /// Высота содержимого, если она известна заранее. У блока выше окна плавно раскрывается только
+  /// часть высотой с окно, остальное (оно за нижним краем) появляется сразу. Иначе длинный список
+  /// пролетал бы видимую часть за доли секунды — за то же время ему надо пройти в разы больший путь.
+  final double? extent;
 
   @override
   State<Reveal> createState() => _RevealState();
@@ -317,19 +322,25 @@ class _RevealState extends State<Reveal> with SingleTickerProviderStateMixin {
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-        animation: _anim,
-        builder: (context, child) => _anim.isDismissed
-            ? const SizedBox(width: double.infinity)
-            : ClipRect(
-                child: Align(
-                  alignment: Alignment.topCenter,
-                  heightFactor: _size.value,
-                  child: Opacity(opacity: _fade.value, child: child),
-                ),
+  Widget build(BuildContext context) {
+    final extent = widget.extent;
+    final screen = MediaQuery.sizeOf(context).height;
+    // Доля высоты, которая раскрывается плавно (см. [Reveal.extent]).
+    final animated = extent != null && extent > screen ? screen / extent : 1.0;
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (context, child) => _anim.isDismissed
+          ? const SizedBox(width: double.infinity)
+          : ClipRect(
+              child: Align(
+                alignment: Alignment.topCenter,
+                heightFactor: _anim.isCompleted ? 1 : _size.value * animated,
+                child: Opacity(opacity: _fade.value, child: child),
               ),
-        child: widget.child,
-      );
+            ),
+      child: widget.child,
+    );
+  }
 }
 
 /// Панель с тонкой рамкой. Если задан onTap — подсвечивается при наведении.

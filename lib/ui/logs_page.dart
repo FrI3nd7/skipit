@@ -299,6 +299,7 @@ class _DayGroupState extends State<_DayGroup> {
         ),
         Reveal(
           open: open,
+          extent: count * _SessionTile.height,
           // Подсветка выбранного журнала — одна на день и «скользит» к новому, как в боковом меню.
           child: Stack(fit: StackFit.passthrough, children: [
             AnimatedPositioned(
