@@ -481,12 +481,21 @@ class _ConnectButtonState extends State<ConnectButton> with SingleTickerProvider
   late final _anim = AnimationController(vsync: this, duration: const Duration(milliseconds: 750));
   bool _hover = false;
 
+  /// Идёт ли сейчас бесконечный повтор (а не доигрывание последнего круга).
+  bool _looping = false;
+
   /// Анимация крутится только пока идёт подключение — в покое окно не перерисовывается впустую.
+  /// Когда подключение закончилось, текущий круг доигрывается до конца: стрелки долетают на место,
+  /// а не отскакивают назад рывком.
   void _syncAnim() {
-    if (widget.busy && !_anim.isAnimating) {
+    if (widget.busy && !_looping) {
+      _looping = true;
       _anim.repeat();
-    } else if (!widget.busy && _anim.isAnimating) {
-      _anim.stop();
+    } else if (!widget.busy && _looping) {
+      _looping = false;
+      _anim.forward().whenComplete(() {
+        if (mounted && !_looping) _anim.value = 0;
+      });
     }
   }
 
@@ -550,7 +559,7 @@ class _ConnectButtonState extends State<ConnectButton> with SingleTickerProvider
                     builder: (_, __) => AppMark(
                       size: 104,
                       // Разгон и торможение в каждом цикле — стрелки «перелетают» на место друг друга.
-                      flight: widget.busy ? Curves.easeInOutCubic.transform(_anim.value) : null,
+                      flight: _anim.isAnimating ? Curves.easeInOutCubic.transform(_anim.value) : null,
                       muted: !lit,
                     ),
                   ),

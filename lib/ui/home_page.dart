@@ -56,7 +56,8 @@ class _HomePageState extends State<HomePage> {
         active: connected,
         child: ConnectButton(
           connected: connected,
-          busy: state.isBusy,
+          // Стрелки «летят» только при подключении; отключение мгновенное, для него анимация не нужна.
+          busy: state.status == ConnStatus.connecting,
           onTap: () => connectOrToggle(context),
         ),
       ),
