@@ -18,6 +18,7 @@ class LogExplain {
     // Адаптер TUN.
     (RegExp(r'Failed to find matching adapter name'), (_) => 'Готового адаптера VPN нет — ядро создаст новый. Это обычная строка, не ошибка.'),
     (RegExp(r'Creating adapter'), (_) => 'Ядро просит Windows создать сетевой адаптер VPN. Если следом нет строки о запуске — Windows его не создала.'),
+    (RegExp(r'Removed orphaned adapter'), (_) => 'Убран брошенный адаптер, оставшийся от прошлого запуска. Работающие адаптеры не трогаются.'),
     (RegExp(r'Using existing driver'), (_) => 'Драйвер адаптера (Wintun) уже установлен в Windows.'),
     (
       RegExp(r'open interface take too much time|configure tun interface'),
@@ -37,6 +38,11 @@ class LogExplain {
   /// где просто упомянут сертификат или REALITY, выглядела бы как поломка.
   static final _problems = <(RegExp, String Function(RegExpMatch))>[
     // Связь с VPN-сервером.
+    (
+      RegExp(r'observatory.*error ping .* with (\S+):'),
+      (m) => 'Ядро само проверяет серверы провайдера, чтобы выбрать лучший: сервер «${m.group(1)}» не ответил '
+          'на проверку. Сразу после подключения это обычное дело; если повторяется постоянно — сервер недоступен.'
+    ),
     (
       RegExp(r'failed to find an available destination|all retry attempts failed|failed to dial'),
       (_) => 'Не удалось соединиться с VPN-сервером: он недоступен или заблокирован. Попробуйте другой сервер.'
