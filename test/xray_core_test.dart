@@ -75,6 +75,8 @@ void main() {
         'routing': {
           'rules': [
             {'ruleTag': 'ru', 'domain': ['domain:ru'], 'outboundTag': 'direct'},
+            // Правило провайдера привязано к прокси-портам — в режиме Xray TUN оно должно действовать и на адаптер.
+            {'inboundTag': ['socks', 'http'], 'domain': ['domain:su'], 'outboundTag': 'direct'},
           ],
         },
       }, AppSettings());
@@ -83,6 +85,8 @@ void main() {
         XrayConfig.addTun(config, settings: AppSettings()..ipv6 = false, apps: apps);
         final rules = (config['routing'] as Map)['rules'] as List;
         rules.removeWhere((r) => jsonEncode(r).contains(RegExp('geoip:|geosite:')));
+        expect(rules.where((r) => jsonEncode(r['domain'] ?? '').contains('domain:su') && r['process'] == null).every(
+            (r) => (r['inboundTag'] as List).contains(XrayConfig.tunTag)), isTrue);
         // DNS из адаптера перехватывается первым правилом, IPv6 при выключенной настройке блокируется.
         expect(rules.first['outboundTag'], 'skipit-dns');
         expect(rules.any((r) => jsonEncode(r['ip']) == '["::/0"]' && r['outboundTag'] == 'skipit-block'), isTrue);
@@ -98,8 +102,9 @@ void main() {
             // После правил для выбранных программ остальной трафик адаптера идёт напрямую.
             final rest = rules.indexWhere((r) => r['process'] == null && r['ip'] == null && r['port'] == null);
             expect(rules[rest]['outboundTag'], 'skipit-direct');
-            // Правила действуют и на адаптер, и на прокси-порты (в «Смешанном» режиме браузеры идут через них).
-            expect(rules[rest]['inboundTag'], [XrayConfig.tunTag, 'socks', 'http']);
+            // Правила действуют на адаптер и на HTTP-порт (в «Смешанном» режиме браузеры идут через него).
+            // SOCKS-порт не затронут: для UDP через SOCKS ядро не определяет программу.
+            expect(rules[rest]['inboundTag'], [XrayConfig.tunTag, 'http']);
             expect(rules.lastIndexOf(byProcess.last), rest - 1);
         }
 
@@ -122,11 +127,9 @@ void main() {
       final rules = (viaSingbox['routing'] as Map)['rules'] as List;
       final byProcess = rules.where((r) => r['process'] != null).toList();
       expect(byProcess.isEmpty, mode == AppRoutingMode.off);
-      expect(byProcess.every((r) => jsonEncode(r['inboundTag']) == '["socks","http"]'), isTrue);
-      if (mode == AppRoutingMode.onlySelected) {
-        // Трафик выбранных программ из адаптера приходит от имени sing-box и не должен уйти напрямую.
-        expect(byProcess.every((r) => (r['process'] as List).contains('skipit-sing-box')), isTrue);
-      }
+      // Только HTTP-порт: через SOCKS в Xray приходит трафик из адаптера от sing-box, его правила не трогают.
+      expect(rules.where((r) => jsonEncode(r['inboundTag'] ?? '').contains('socks')), isEmpty);
+      expect(byProcess.every((r) => jsonEncode(r['inboundTag']) == '["http"]'), isTrue);
       rules.removeWhere((r) => jsonEncode(r).contains(RegExp('geoip:|geosite:')));
       final dir = await Directory.systemTemp.createTemp('skipit-xray-test');
       try {

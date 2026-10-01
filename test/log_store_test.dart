@@ -50,6 +50,9 @@ void main() {
     expect(LogExplain.of('xray', 'The "freedom.domainStrategy" setting is deprecated'), contains('устаревший'));
     expect(LogExplain.of('sing-box', 'open interface take too much time'), contains('адаптер'));
     expect(LogExplain.of('app', 'Ошибка подключения: timeout'), isNull);
+    // Пояснения к сбоям — только у предупреждений и ошибок: обычная строка с тем же словом не помечается.
+    expect(LogExplain.of('xray', '[Warning] transport/internet/tcp: REALITY: failed to verify'), contains('защищённого'));
+    expect(LogExplain.of('xray', '[Info] transport/internet/tcp: dialing REALITY to tcp:example.com:443'), isNull);
     expect(LogExplain.of('xray', 'A unified platform for anti-censorship.'), isNull);
   });
 

@@ -44,8 +44,10 @@ class CoreProcess {
     final p = await Process.start(exe, args,
         workingDirectory: File(exe).parent.path, environment: env);
     _process = p;
-    p.stdout.transform(utf8.decoder).transform(const LineSplitter()).listen(_feed);
-    p.stderr.transform(utf8.decoder).transform(const LineSplitter()).listen(_feed);
+    // Строка в другой кодировке (сообщение Windows) не должна обрывать чтение журнала ядра.
+    const decoder = Utf8Decoder(allowMalformed: true);
+    p.stdout.transform(decoder).transform(const LineSplitter()).listen(_feed);
+    p.stderr.transform(decoder).transform(const LineSplitter()).listen(_feed);
     unawaited(p.exitCode.then((code) {
       if (!identical(_process, p)) return;
       _process = null;

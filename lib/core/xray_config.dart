@@ -70,6 +70,34 @@ class XrayConfig {
     }
   }
 
+  /// Теги, которые программа ставит сама: вход `api` и всё с приставкой `skipit-`.
+  static bool _reservedTag(Object? tag) => tag is String && (tag == 'api' || tag.startsWith('skipit-'));
+
+  /// Убирает из конфига провайдера то, чем чужой конфиг мог бы навредить компьютеру. Подключению это
+  /// не нужно, а SkipIt обычно работает с правами администратора:
+  ///  - `reverse` — обратный прокси: даёт серверу доступ в домашнюю сеть пользователя;
+  ///  - `metrics` — отладочный порт ядра, который можно открыть в сеть;
+  ///  - `masterKeyLog` — запись ключей шифрования в произвольный файл на диске.
+  static void _dropDangerous(Map<String, dynamic> cfg) {
+    cfg
+      ..remove('reverse')
+      ..remove('metrics');
+    for (final o in (cfg['outbounds'] as List? ?? const [])) {
+      final settings = o is Map ? o['settings'] : null;
+      if (settings is Map) settings.remove('reverse');
+    }
+    void strip(Object? node) {
+      if (node is Map) {
+        node.remove('masterKeyLog');
+        node.values.forEach(strip);
+      } else if (node is List) {
+        node.forEach(strip);
+      }
+    }
+
+    strip(cfg);
+  }
+
   /// Конфиг провайдера используется целиком; подменяются только локальные входы (наши порты),
   /// журнал и статистика — чтобы работали счётчики трафика и настройки портов.
   static Map<String, dynamic> buildFromProvider(Map<String, dynamic> provider, AppSettings settings) {
@@ -83,9 +111,18 @@ class XrayConfig {
 
     // Входы SOCKS/HTTP провайдера заменяем своими (теги те же — правила провайдера на них ссылаются),
     // прочие входы (например, DNS) оставляем.
+    // Они слушают только этот компьютер: конфиг пришёл извне и не должен открывать порты в сеть.
+    // Вход TUN и теги, занятые программой, из конфига провайдера не берутся.
     final keep = [
       for (final i in (cfg['inbounds'] as List? ?? const []))
-        if (i is Map && i['protocol'] != 'socks' && i['protocol'] != 'http' && i['protocol'] != 'mixed') i,
+        if (i is Map &&
+            !const ['socks', 'http', 'mixed', 'tun'].contains(i['protocol']) &&
+            !_reservedTag(i['tag']))
+          i..['listen'] = '127.0.0.1',
+    ];
+    cfg['outbounds'] = [
+      for (final o in (cfg['outbounds'] as List))
+        if (!(o is Map && _reservedTag(o['tag']))) o,
     ];
     cfg['inbounds'] = [
       {
@@ -122,6 +159,7 @@ class XrayConfig {
     cfg['policy'] = policy;
     // Метаданные клиента Xray не нужны.
     cfg.remove('remarks');
+    _dropDangerous(cfg);
     _migrateDeprecated(cfg);
     return dropRemovedOptions(cfg);
   }
@@ -261,6 +299,13 @@ class XrayConfig {
     '255.255.255.255/32', 'fc00::/7', 'fe80::/10', 'ff00::/8',
   ];
 
+  /// Теги из правила: в конфиге Xray это список или одна строка.
+  static List<String> _tags(Object? value) => switch (value) {
+        final List l => [for (final t in l) '$t'],
+        final String s => [s],
+        _ => const [],
+      };
+
   static void _collectAddresses(Object? node, Set<String> out) {
     if (node is Map) {
       final a = node['address'];
@@ -347,7 +392,15 @@ class XrayConfig {
     cfg['dns'] = dns;
 
     final routing = (cfg['routing'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
-    final rules = [...(routing['rules'] as List? ?? const [])];
+    // Правила провайдера, привязанные к прокси-портам, должны действовать и на трафик из адаптера —
+    // иначе он пошёл бы мимо них, через выход по умолчанию.
+    final rules = [
+      for (final r in (routing['rules'] as List? ?? const []))
+        if (r is Map && _tags(r['inboundTag']).any(_proxyInbounds.contains))
+          {...r, 'inboundTag': [..._tags(r['inboundTag']), tunTag]}
+        else
+          r,
+    ];
     final own = <Map<String, dynamic>>[
       {'inboundTag': inbound, 'port': '53', 'outboundTag': dnsOut},
       {'ip': [_bootstrapDns], 'port': '53', 'outboundTag': direct},
@@ -357,27 +410,28 @@ class XrayConfig {
 
     routing['rules'] = [
       ...own,
-      // Правила по приложениям действуют и на адаптер, и на прокси-порты: в «Смешанном» режиме
+      // Правила по приложениям действуют и на адаптер, и на HTTP-порт: в «Смешанном» режиме
       // браузеры ходят через системный прокси, мимо адаптера.
-      ..._appRules(apps, [tunTag, ..._proxyInbounds], rules, defaultTag, direct),
+      ..._appRules(apps, [tunTag, _httpInbound], rules, defaultTag, direct),
       ...rules,
     ];
     cfg['routing'] = routing;
   }
 
-  static const _proxyInbounds = ['socks', 'http'];
+  /// Вход системного прокси. На SOCKS-порт правила по приложениям не распространяются: для UDP через
+  /// SOCKS Xray не определяет программу, и в режиме «только выбранные» такой трафик ушёл бы мимо VPN.
+  static const _httpInbound = 'http';
+  static const _proxyInbounds = ['socks', _httpInbound];
 
   /// Правила по приложениям для соединений, пришедших через входы [inbound].
   /// Запись списка — имя процесса, путь или папка с прямыми слэшами: Xray понимает их в том же виде.
-  /// [alwaysVpn] — процессы, которые в режиме «только выбранные» считаются выбранными.
   static List<Map<String, dynamic>> _appRules(
     AppRules apps,
     List<String> inbound,
     List rules,
     String defaultTag,
-    String direct, {
-    List<String> alwaysVpn = const [],
-  }) {
+    String direct,
+  ) {
     final listed = apps.enabledMatches;
     switch (apps.mode) {
       case AppRoutingMode.off:
@@ -389,11 +443,14 @@ class XrayConfig {
       case AppRoutingMode.onlySelected:
         // Правила «все, кроме списка» в Xray нет. Поэтому для выбранных программ повторяются обычные
         // правила, а всё остальное с этих входов идёт напрямую.
-        final vpn = [...listed, ...alwaysVpn];
+        final vpn = listed;
         return [
           if (vpn.isNotEmpty) ...[
             for (final r in rules)
-              if (r is Map && r['inboundTag'] == null && r['process'] == null)
+              // Берутся общие правила и те, что провайдер привязал к этим же входам.
+              if (r is Map &&
+                  r['process'] == null &&
+                  (r['inboundTag'] == null || _tags(r['inboundTag']).any(inbound.contains)))
                 {...r.cast<String, dynamic>(), 'inboundTag': inbound, 'process': vpn}..remove('ruleTag'),
             {'inboundTag': inbound, 'process': vpn, 'outboundTag': defaultTag},
           ],
@@ -403,8 +460,9 @@ class XrayConfig {
   }
 
   /// TUN держит sing-box: правила по приложениям для трафика из адаптера применяет он сам
-  /// ([SingboxConfig]). Но через прокси-порты программы приходят в Xray напрямую, мимо sing-box
+  /// ([SingboxConfig]). Но через системный прокси программы приходят в Xray напрямую, мимо sing-box
   /// (в «Смешанном» режиме так ходят браузеры) — для них те же правила добавляются сюда.
+  /// SOCKS-порт не затрагивается: через него в Xray приходит весь трафик из адаптера от sing-box.
   static void addProxyAppRules(Map<String, dynamic> cfg, {required AppSettings settings, required AppRules apps}) {
     if (apps.mode == AppRoutingMode.off) return;
     const direct = 'skipit-direct';
@@ -421,8 +479,7 @@ class XrayConfig {
     final routing = (cfg['routing'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
     final rules = [...(routing['rules'] as List? ?? const [])];
     routing['rules'] = [
-      // Трафик выбранных программ из адаптера приходит сюда от имени sing-box — он уже отобран.
-      ..._appRules(apps, _proxyInbounds, rules, defaultTag, direct, alwaysVpn: const ['skipit-sing-box']),
+      ..._appRules(apps, const [_httpInbound], rules, defaultTag, direct),
       ...rules,
     ];
     cfg['routing'] = routing;

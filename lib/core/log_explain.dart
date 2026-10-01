@@ -31,6 +31,11 @@ class LogExplain {
       (_) => 'Выход в сеть заблокирован файрволом (например, simplewall). Разрешите в нём ядро SkipIt.'
     ),
 
+  ];
+
+  /// Пояснения к сбоям: показываются только у предупреждений и ошибок — иначе обычная строка,
+  /// где просто упомянут сертификат или REALITY, выглядела бы как поломка.
+  static final _problems = <(RegExp, String Function(RegExpMatch))>[
     // Связь с VPN-сервером.
     (
       RegExp(r'failed to find an available destination|all retry attempts failed|failed to dial'),
@@ -67,10 +72,12 @@ class LogExplain {
     (RegExp(r'rejected|blocked'), (_) => 'Соединение отклонено правилами.'),
   ];
 
+  static final _problem = RegExp(r'\[(Warning|Error)\]|\b(WARN|ERROR|FATAL)\b|fail', caseSensitive: false);
+
   /// Пояснение к строке или null, если сказать нечего. Строки самой программы уже написаны по-русски.
   static String? of(String source, String text) {
     if (source != 'xray' && source != 'sing-box' && source != 'test') return null;
-    for (final (pattern, explain) in _rules) {
+    for (final (pattern, explain) in [..._rules, if (_problem.hasMatch(text)) ..._problems]) {
       final m = pattern.firstMatch(text);
       if (m != null) return explain(m);
     }

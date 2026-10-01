@@ -188,7 +188,7 @@ class _TunCorePicker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => Tooltip(
-        message: 'Чем поднимать TUN-адаптер. Xray — пробный режим: без sing-box, защита от утечек ещё проверяется',
+        message: 'Чем поднимать TUN-адаптер: sing-box — отдельным ядром, Xray — тем же ядром, что и подключение',
         waitDuration: const Duration(milliseconds: 500),
         child: Hover(
           builder: (context, hovered) => GestureDetector(
@@ -196,7 +196,7 @@ class _TunCorePicker extends StatelessWidget {
             onTap: () async {
               final picked = await showAppMenu<TunCore>(context, matchWidth: true, items: [
                 AppMenuItem(TunCore.singbox, 'sing-box', checked: value == TunCore.singbox),
-                AppMenuItem(TunCore.xray, 'Xray', hint: 'пробный', checked: value == TunCore.xray),
+                AppMenuItem(TunCore.xray, 'Xray', checked: value == TunCore.xray),
               ]);
               if (picked != null) onChanged(picked);
             },
@@ -221,7 +221,7 @@ class _TunCorePicker extends StatelessWidget {
                   alignment: Alignment.centerLeft,
                   crossFadeState: value == TunCore.xray ? CrossFadeState.showSecond : CrossFadeState.showFirst,
                   firstChild: const Text('sing-box', maxLines: 1, softWrap: false, style: _coreStyle),
-                  secondChild: const Text('Xray · пробный', maxLines: 1, softWrap: false, style: _coreStyle),
+                  secondChild: const Text('Xray', maxLines: 1, softWrap: false, style: _coreStyle),
                 ),
                 const SizedBox(width: 4),
                 Icon(Icons.expand_more_rounded, size: 18, color: hovered ? C.orange : C.muted),

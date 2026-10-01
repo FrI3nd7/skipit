@@ -152,12 +152,11 @@ class SettingsPage extends StatelessWidget {
           _Row(
             title: 'Ядро для TUN',
             subtitle: s.tunCore == TunCore.xray
-                ? 'Xray — пробный режим: адаптер поднимает само ядро Xray, без sing-box. '
-                    'Защита от утечек в нём ещё проверяется'
-                : 'sing-box — обычный режим. Действует в режимах TUN и «Смешанный»',
+                ? 'Xray: адаптер поднимает то же ядро, что и подключение, sing-box не запускается'
+                : 'sing-box держит адаптер и передаёт трафик в Xray. Действует в режимах TUN и «Смешанный»',
             trailing: Segmented<TunCore>(
               value: s.tunCore,
-              items: const {TunCore.singbox: 'sing-box', TunCore.xray: 'Xray (пробный)'},
+              items: const {TunCore.singbox: 'sing-box', TunCore.xray: 'Xray'},
               onChanged: (v) {
                 s.tunCore = v;
                 state.changed();

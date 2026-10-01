@@ -32,7 +32,7 @@ enum TunCore {
   /// sing-box держит адаптер и отдаёт трафик в SOCKS-порт Xray.
   singbox,
 
-  /// Адаптер поднимает сам Xray, без sing-box (пробный режим).
+  /// Адаптер поднимает сам Xray, без sing-box.
   xray,
 }
 

@@ -51,6 +51,46 @@ void main() {
     }
   });
 
+  test('из конфига провайдера убирается то, чем он мог бы навредить компьютеру', () async {
+    final cfg = XrayConfig.buildFromProvider({
+      'reverse': {'bridges': [{'tag': 'bridge', 'domain': 'x.example'}]},
+      'metrics': {'tag': 'metrics', 'listen': '0.0.0.0:11111'},
+      'inbounds': [
+        {'tag': 'dns-in', 'protocol': 'dokodemo-door', 'listen': '0.0.0.0', 'port': 10853, 'settings': {'address': '1.1.1.1', 'port': 53, 'network': 'udp'}},
+        {'tag': 'evil-tun', 'protocol': 'tun', 'settings': {'name': 'evil'}},
+        {'tag': 'skipit-tun', 'protocol': 'dokodemo-door', 'port': 1, 'settings': {'address': '1.1.1.1'}},
+      ],
+      'outbounds': [
+        {
+          'tag': 'proxy',
+          'protocol': 'vless',
+          'settings': {'address': 'a.example', 'port': 443, 'id': '3b5a3c2e-8f6b-4c7e-9d1a-2f4e6a8c0b1d', 'encryption': 'none', 'reverse': {'tag': 'r'}},
+          'streamSettings': {'security': 'tls', 'tlsSettings': {'serverName': 'a.example', 'masterKeyLog': r'C:\Windows\keys.log'}},
+        },
+        {'tag': 'skipit-direct', 'protocol': 'vless', 'settings': {'address': 'b.example', 'port': 443, 'id': '3b5a3c2e-8f6b-4c7e-9d1a-2f4e6a8c0b1d', 'encryption': 'none'}},
+        {'tag': 'direct', 'protocol': 'freedom'},
+      ],
+    }, AppSettings());
+    final text = jsonEncode(cfg);
+    for (final bad in ['reverse', 'metrics', 'masterKeyLog', 'evil-tun', 'b.example']) {
+      expect(text, isNot(contains(bad)), reason: bad);
+    }
+    // Чужие входы слушают только этот компьютер; тег, занятый программой, из конфига не берётся.
+    final inbounds = cfg['inbounds'] as List;
+    expect(inbounds.map((i) => i['tag']), ['socks', 'http', 'dns-in']);
+    expect(inbounds.last['listen'], '127.0.0.1');
+
+    // Очищенный конфиг принимается ядром.
+    final xray = File('core/skipit-xray.exe');
+    if (xray.existsSync()) {
+      final f = File('${Directory.systemTemp.path}\\skipit-harden-test.json');
+      await f.writeAsString(jsonEncode(cfg));
+      final r = await Process.run(xray.absolute.path, ['run', '-test', '-c', f.path], stdoutEncoding: utf8, stderrEncoding: utf8);
+      expect(r.exitCode, 0, reason: '${r.stdout}\n${r.stderr}');
+      await f.delete();
+    }
+  });
+
   test('подменённый файл обновления отбрасывается', () async {
     final f = File('${Directory.systemTemp.path}\\skipit-verify-test.bin');
     await f.writeAsString('настоящий установщик');

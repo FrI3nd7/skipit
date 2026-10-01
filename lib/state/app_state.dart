@@ -318,7 +318,7 @@ class AppState extends ChangeNotifier {
 
   bool get usesTun => settings.mode == ConnectionMode.tun || settings.mode == ConnectionMode.mixed;
 
-  /// TUN поднимает само ядро Xray, sing-box не запускается (пробный режим).
+  /// TUN поднимает само ядро Xray, sing-box не запускается.
   bool get xrayTun => usesTun && settings.tunCore == TunCore.xray;
   bool get isConnected => status == ConnStatus.connected;
   bool get isBusy => status == ConnStatus.connecting || status == ConnStatus.disconnecting;
