@@ -158,7 +158,7 @@ class AppState extends ChangeNotifier {
         (settings.connectOnStart && (args.contains('--autostart') || args.contains('--elevated')));
     if (wantConnect && selectedServer != null) {
       // Подписки обновляем после подключения, а не одновременно с ним: запросы, начатые напрямую,
-      // оборвались бы на полпути, когда трафик уходит в адаптер (а «рубильник» их просто не выпустит).
+      // оборвались бы на полпути, когда трафик уходит в адаптер (а Kill Switch их просто не выпустит).
       unawaited(() async {
         try {
           await connect();
@@ -296,7 +296,7 @@ class AppState extends ChangeNotifier {
 
   Future<void> shutdown() async {
     await disconnect();
-    // «Рубильник» мог держать интернет закрытым и без подключения — при выходе снимаем его.
+    // Kill Switch мог держать интернет закрытым и без подключения — при выходе снимаем его.
     await KillSwitch.release();
     await saveNow();
     log.close();
@@ -444,7 +444,7 @@ class AppState extends ChangeNotifier {
     const limit = Duration(seconds: 45);
     final viaProxy = isConnected && settings.updateViaProxy ? (_session ?? settings).httpPort : null;
     // Пока VPN подключён, «напрямую» — это через ядро мимо VPN-сервера (см. XrayConfig.addDirectInbound):
-    // обычный запрос в режиме TUN ушёл бы в тот же туннель, а «рубильник» его не выпустил бы вовсе.
+    // обычный запрос в режиме TUN ушёл бы в тот же туннель, а Kill Switch его не выпустил бы вовсе.
     Future<FetchedSubscription> direct() =>
         Net.fetchSubscription(sub.url, settings, proxyPort: isConnected ? _directPort : null).timeout(limit);
     // Сервер подписки уже не ответил через VPN, а напрямую ответил — не ждём таймаута ещё раз.
@@ -637,16 +637,16 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> reconnect() async {
-    // «Рубильник» на время переподключения не снимается — иначе в паузе трафик пошёл бы напрямую.
+    // Kill Switch на время переподключения не снимается — иначе в паузе трафик пошёл бы напрямую.
     await disconnect(keepError: true, hold: true);
     await connect();
   }
 
-  /// «Рубильник» держит интернет закрытым, а VPN не подключён: ядро упало и не поднялось,
+  /// Kill Switch держит интернет закрытым, а VPN не подключён: ядро упало и не поднялось,
   /// или переподключение не удалось. Окно показывает это и предлагает открыть интернет.
   bool get killSwitchHolding => KillSwitch.active && status == ConnStatus.disconnected;
 
-  /// Включение и выключение «рубильника» в настройках действует сразу, без переподключения.
+  /// Включение и выключение Kill Switch в настройках действует сразу, без переподключения.
   Future<void> setKillSwitch(bool on) async {
     settings.killSwitch = on;
     changed();
@@ -666,7 +666,7 @@ class AppState extends ChangeNotifier {
   /// Пользователь решил открыть интернет без VPN (кнопка на главной).
   Future<void> releaseKillSwitch() async {
     await KillSwitch.release();
-    log.add('app', '«Рубильник» снят: интернет открыт без VPN');
+    log.add('app', 'Kill Switch снят: интернет открыт без VPN');
     notifyListeners();
   }
 
@@ -753,7 +753,7 @@ class AppState extends ChangeNotifier {
   /// [ignoreOtherVpn] — пользователь уже предупреждён о другом VPN и решил подключаться всё равно.
   Future<void> connect({bool ignoreOtherVpn = false}) async {
     if (isBusy || isConnected) return;
-    // «Рубильник» уже держит интернет закрытым (переподключение или сбой ядра): если подключиться
+    // Kill Switch уже держит интернет закрытым (переподключение или сбой ядра): если подключиться
     // не выйдет, он так и останется закрытым.
     final held = KillSwitch.active;
     _cancelConnect = false;
@@ -851,7 +851,7 @@ class AppState extends ChangeNotifier {
         ]);
       await File(AppPaths.configFile).writeAsString(const JsonEncoder.withIndent('  ').convert(config));
       _checkCancel();
-      // «Рубильник» ставится до запуска ядер: с этой минуты мимо VPN ничего не выходит.
+      // Kill Switch ставится до запуска ядер: с этой минуты мимо VPN ничего не выходит.
       if (usesTun && settings.killSwitch) {
         await KillSwitch.engage();
       } else {
@@ -938,10 +938,10 @@ class AppState extends ChangeNotifier {
         log.add('app', 'Ошибка подключения: $e');
       }
       await _teardown();
-      // Подключались с открытым интернетом — возвращаем как было. Если же «рубильник» уже держал
+      // Подключались с открытым интернетом — возвращаем как было. Если же Kill Switch уже держал
       // его закрытым, оставляем закрытым: решение открыть — за пользователем.
       if (!held) await KillSwitch.release();
-      if (KillSwitch.active) log.add('app', '«Рубильник» держит интернет закрытым');
+      if (KillSwitch.active) log.add('app', 'Kill Switch держит интернет закрытым');
       log.endSession();
       status = ConnStatus.disconnected;
       notifyListeners();
@@ -988,7 +988,7 @@ class AppState extends ChangeNotifier {
     return 'Не удалось поднять TUN:\n$tail';
   }
 
-  /// [hold] — не снимать «рубильник»: отключение не по воле пользователя (сбой ядра, переподключение).
+  /// [hold] — не снимать Kill Switch: отключение не по воле пользователя (сбой ядра, переподключение).
   Future<void> disconnect({bool keepError = false, bool hold = false}) async {
     if (status == ConnStatus.disconnected) return;
     // Подключение ещё идёт — отменяем его; всё уберёт сам connect().
@@ -998,7 +998,7 @@ class AppState extends ChangeNotifier {
     await _teardown();
     if (!hold) await KillSwitch.release();
     log.add('app', 'Отключено');
-    if (KillSwitch.active) log.add('app', '«Рубильник» держит интернет закрытым');
+    if (KillSwitch.active) log.add('app', 'Kill Switch держит интернет закрытым');
     log.endSession();
     if (!keepError) lastError = null;
     status = ConnStatus.disconnected;
@@ -1036,7 +1036,7 @@ class AppState extends ChangeNotifier {
     final retry = settings.autoReconnect && _crashTimes.length <= 1 && uptime > const Duration(seconds: 30);
     log.add('app', 'Ядро завершилось (код $code) через ${uptime.inSeconds} с работы${retry ? ', переподключаюсь' : ''}');
     unawaited(() async {
-      // Включённый «рубильник» остаётся стоять: пока VPN не вернулся, трафик напрямую не идёт.
+      // Включённый Kill Switch остаётся стоять: пока VPN не вернулся, трафик напрямую не идёт.
       await disconnect(keepError: true, hold: true);
       if (retry) {
         await Future.delayed(const Duration(seconds: 3));

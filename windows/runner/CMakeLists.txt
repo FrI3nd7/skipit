@@ -36,7 +36,7 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib" "shell32.lib" "gdiplus.lib")
-# «Рубильник» (kill_switch.cpp): фильтры Windows Filtering Platform.
+# Kill Switch (kill_switch.cpp): фильтры Windows Filtering Platform.
 target_link_libraries(${BINARY_NAME} PRIVATE "fwpuclnt.lib" "rpcrt4.lib" "ws2_32.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 

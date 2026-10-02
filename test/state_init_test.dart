@@ -31,7 +31,7 @@ void main() {
     await tmp.delete(recursive: true);
   });
 
-  test('«рубильник» выключен по умолчанию и сохраняется в настройках', () async {
+  test('Kill Switch выключен по умолчанию и сохраняется в настройках', () async {
     expect(AppSettings().killSwitch, isFalse);
     expect(AppSettings.fromJson(const {}).killSwitch, isFalse);
     final on = AppSettings()..killSwitch = true;
@@ -40,7 +40,7 @@ void main() {
     // Пока фильтры не стоят, окно не должно показывать, что интернет закрыт.
     final state = AppState();
     expect(state.killSwitchHolding, isFalse);
-    // Выключение «рубильника» без подключения ничего не ломает (в тестах нет оболочки окна).
+    // Выключение Kill Switch без подключения ничего не ломает (в тестах нет оболочки окна).
     await state.releaseKillSwitch();
     expect(KillSwitch.active, isFalse);
   });

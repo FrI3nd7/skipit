@@ -169,7 +169,7 @@ Future<void> main(List<String> rawArgs) async {
       ConnStatus.connected => 'Подключено',
       ConnStatus.connecting => 'Подключение…',
       ConnStatus.disconnecting => 'Отключение…',
-      ConnStatus.disconnected => state.killSwitchHolding ? 'Интернет закрыт «рубильником»' : 'Не подключено',
+      ConnStatus.disconnected => state.killSwitchHolding ? 'Интернет закрыт: Kill Switch' : 'Не подключено',
     };
     final tooltip = '${AppPaths.appName} — $status${server != null ? '\n$server' : ''}';
     // Тема берётся из настроек, а не из уже применённой палитры: этот обработчик срабатывает раньше,

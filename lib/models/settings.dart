@@ -56,7 +56,7 @@ class AppSettings {
   bool autoSelect = false;
   bool autoReconnect = true;
 
-  /// «Рубильник»: в режимах с TUN не выпускать трафик мимо VPN, даже если ядро упало.
+  /// Kill Switch: в режимах с TUN не выпускать трафик мимо VPN, даже если ядро упало.
   bool killSwitch = false;
   bool connectOnStart = false;
 

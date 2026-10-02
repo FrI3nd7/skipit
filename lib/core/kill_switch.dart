@@ -4,7 +4,7 @@ import 'core_manager.dart';
 import 'paths.dart';
 import 'xray_config.dart';
 
-/// «Рубильник»: пока он включён, Windows не выпускает трафик мимо VPN. В сеть могут выходить только
+/// Kill Switch: пока он включён, Windows не выпускает трафик мимо VPN. В сеть могут выходить только
 /// ядра, соединения через адаптер VPN и локальная сеть (без DNS). Если адаптер пропал — ядро упало —
 /// программы остаются без интернета, а не идут напрямую со своего настоящего адреса.
 ///
@@ -27,11 +27,11 @@ class KillSwitch {
       });
       active = true;
     } on PlatformException catch (e) {
-      throw CoreException('Не удалось включить «рубильник» (${e.message}). '
+      throw CoreException('Не удалось включить Kill Switch (${e.message}). '
           'Подключение остановлено, чтобы не работать без обещанной защиты. '
           'Выключить его можно в Настройки → Подключение.');
     } on MissingPluginException {
-      throw CoreException('«Рубильник» недоступен в этой сборке.');
+      throw CoreException('Kill Switch недоступен в этой сборке.');
     }
   }
 

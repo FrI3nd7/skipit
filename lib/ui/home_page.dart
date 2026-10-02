@@ -133,7 +133,7 @@ class _HomePageState extends State<HomePage> {
       ),
       const SizedBox(height: 10),
       SizedBox(width: 360, child: _RoutingInfo(summary: state.routingSummary, onTap: () => state.openPage(AppState.routingPage))),
-      // «Рубильник» держит интернет закрытым без VPN — это видно, пока его не снимут или VPN не вернётся.
+      // Kill Switch держит интернет закрытым без VPN — это видно, пока его не снимут или VPN не вернётся.
       if (state.killSwitchHolding) ...[
         const SizedBox(height: 14),
         ConstrainedBox(
@@ -311,7 +311,7 @@ class _RoutingInfoState extends State<_RoutingInfo> {
       );
 }
 
-/// Интернет закрыт «рубильником»: объяснение и кнопка, которая открывает его без VPN.
+/// Kill Switch держит интернет закрытым: объяснение и кнопка, которая открывает его без VPN.
 class _KillSwitchBox extends StatelessWidget {
   const _KillSwitchBox({required this.onRelease});
   final VoidCallback onRelease;
@@ -330,7 +330,7 @@ class _KillSwitchBox extends StatelessWidget {
             const Icon(Icons.shield_rounded, size: 18, color: C.orange),
             const SizedBox(width: 8),
             Expanded(
-              child: Text('Интернет закрыт «рубильником»',
+              child: Text('Интернет закрыт: Kill Switch',
                   style: TextStyle(color: C.text, fontSize: 13, fontWeight: FontWeight.w700)),
             ),
           ]),

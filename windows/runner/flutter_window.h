@@ -40,7 +40,7 @@ class FlutterWindow : public Win32Window {
   void HandleTrayCall(
       const flutter::MethodCall<flutter::EncodableValue>& call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
-  // «Рубильник»: команды из Dart (lib/core/kill_switch.dart), сами фильтры — в kill_switch.cpp.
+  // Kill Switch: команды из Dart (lib/core/kill_switch.dart), сами фильтры — в kill_switch.cpp.
   void HandleKillSwitchCall(
       const flutter::MethodCall<flutter::EncodableValue>& call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);

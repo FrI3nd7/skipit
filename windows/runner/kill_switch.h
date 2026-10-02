@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-// «Рубильник»: фильтры Windows (WFP), которые не выпускают трафик мимо VPN.
+// Kill Switch: фильтры Windows (WFP), которые не выпускают трафик мимо VPN.
 // Управляется из Dart через канал "skipit/killswitch" (lib/core/kill_switch.dart).
 //
 // Пока фильтры стоят, в сеть могут выходить только:
