@@ -73,6 +73,8 @@ struct Menu {
   TrayMenuModel model;
   std::vector<Item> items;
   std::vector<Label> labels;
+  // Названия провайдеров в списке серверов (видимые сейчас).
+  std::vector<Label> groups;
   // Вертикальные позиции линий-разделителей.
   std::vector<int> separators;
   // Подложки переключателей режима и ядра TUN, область списка серверов.
@@ -144,6 +146,7 @@ int Layout(Menu& m) {
   const auto px = [&m](int v) { return static_cast<int>(v * m.scale + 0.5); };
   const int left = px(kPadding), right = px(kWidth - kPadding);
   m.labels.clear();
+  m.groups.clear();
   m.separators.clear();
   SetRectEmpty(&m.mode_track);
   SetRectEmpty(&m.core_track);
@@ -209,13 +212,13 @@ int Layout(Menu& m) {
         item.rect = RECT{left, y + px(kRowHeight) * row, right, y + px(kRowHeight) * (row + 1)};
       }
     }
-    // Заголовки провайдеров — подписями, как названия разделов.
+    // Заголовки провайдеров — отдельными строками между серверами.
     for (int row = 0; row < visible; row++) {
       const int value = m.rows[row + m.server_offset];
       if (value >= 0) continue;
       const int top = y + px(kRowHeight) * row;
-      m.labels.push_back(Label{m.model.servers[-1 - value].group,
-                               RECT{left + px(10), top + px(8), right - px(10), top + px(kRowHeight)}});
+      m.groups.push_back(Label{m.model.servers[-1 - value].group,
+                               RECT{left + px(4), top + px(5), right - px(8), top + px(kRowHeight - 3)}});
     }
     y += px(kRowHeight) * visible;
   }
@@ -280,6 +283,7 @@ void Paint(HWND hwnd, HDC target) {
     Gdiplus::Font title_font(L"Segoe UI", 14 * s, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
     Gdiplus::Font small_font(L"Segoe UI", 12 * s, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
     Gdiplus::Font label_font(L"Segoe UI", 10.5f * s, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
+    Gdiplus::Font group_font(L"Segoe UI", 12.5f * s, Gdiplus::FontStyleBold, Gdiplus::UnitPixel);
     Gdiplus::Font item_font(L"Segoe UI Semibold", 13.5f * s, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
     Gdiplus::Font mode_font(L"Segoe UI Semibold", 12 * s, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
     // Значки: в Windows 11 — Segoe Fluent Icons, в Windows 10 — Segoe MDL2 Assets.
@@ -314,6 +318,17 @@ void Paint(HWND hwnd, HDC target) {
     }
     for (const Label& label : m->labels) {
       g.DrawString(label.text.c_str(), -1, &label_font, ToRectF(label.rect), &format, &muted_brush);
+    }
+
+    // Провайдер: плашка во всю ширину с оранжевой меткой и названием цветом основного текста —
+    // чтобы заголовок не терялся среди серверов.
+    for (const Label& group : m->groups) {
+      const Gdiplus::RectF r = ToRectF(group.rect);
+      FillRounded(g, r, 8 * s, Rgb(p.track));
+      FillRounded(g, Gdiplus::RectF(r.X + 9 * s, r.Y + (r.Height - 12 * s) / 2, 3 * s, 12 * s), 1.5f * s,
+                  Rgb(kOrange));
+      g.DrawString(group.text.c_str(), -1, &group_font,
+                   Gdiplus::RectF(r.X + 20 * s, r.Y, r.Width - 28 * s, r.Height), &format, &text_brush);
     }
 
     // Подложки переключателей режима и ядра TUN.
