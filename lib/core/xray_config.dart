@@ -560,7 +560,8 @@ class XrayConfig {
       // С этой настройкой адрес сервера в исходящем соединении ищет встроенный DNS Xray.
       final stream = (o['streamSettings'] ??= <String, dynamic>{}) as Map;
       final sockopt = (stream['sockopt'] ??= <String, dynamic>{}) as Map;
-      sockopt['domainStrategy'] ??= strategy;
+      // «AsIs» из конфига провайдера значит «спросить Windows» — это как раз то, чего здесь быть не должно.
+      if (sockopt['domainStrategy'] == null || sockopt['domainStrategy'] == 'AsIs') sockopt['domainStrategy'] = strategy;
     }
     if (domains.isEmpty) return;
 

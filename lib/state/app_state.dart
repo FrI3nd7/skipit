@@ -447,8 +447,10 @@ class AppState extends ChangeNotifier {
     // обычный запрос в режиме TUN ушёл бы в тот же туннель, а Kill Switch его не выпустил бы вовсе.
     // Так идут только подписки по https: по http ссылка с ключом ушла бы открытым текстом через
     // интернет-провайдера. Для них остаётся обычный запрос — в режиме TUN он идёт через туннель.
-    final past = isConnected && directSubscriptionHost(sub.url) != null ? _directPort : null;
-    Future<FetchedSubscription> direct() => Net.fetchSubscription(sub.url, settings, proxyPort: past).timeout(limit);
+    // Порт берётся в момент запроса: за время первой попытки VPN могли отключить.
+    Future<FetchedSubscription> direct() => Net.fetchSubscription(sub.url, settings,
+            proxyPort: isConnected && directSubscriptionHost(sub.url) != null ? _directPort : null)
+        .timeout(limit);
     // Сервер подписки уже не ответил через VPN, а напрямую ответил — не ждём таймаута ещё раз.
     if (viaProxy != null && !_subsDirectOnly.contains(sub.id)) {
       try {
