@@ -492,7 +492,10 @@ class _SessionView extends StatelessWidget {
                     await Clipboard.setData(ClipboardData(
                         text: showConns
                             ? conns.map(_connLine).join('\n')
-                            : lines.map((l) => '${l.time.toIso8601String()} [${l.source}] ${l.text}').join('\n')));
+                            : lines
+                                .map((l) => '${l.time.toIso8601String()} [${l.source}] ${l.text}'
+                                    '${l.repeats > 1 ? '  ×${l.repeats}' : ''}')
+                                .join('\n')));
                     onCopied();
                   },
           ),
@@ -588,6 +591,12 @@ class _LineText extends StatelessWidget {
         TextSpan(text: '${_two(t.hour)}:${_two(t.minute)}:${_two(t.second)} ', style: TextStyle(color: C.muted)),
         TextSpan(text: '[${line.source}] ', style: TextStyle(color: C.cyan)),
         TextSpan(text: line.text, style: TextStyle(color: color)),
+        // Одинаковые строки ядра не повторяются в журнале — у первой растёт счётчик.
+        if (line.repeats > 1)
+          TextSpan(
+            text: '  ×${line.repeats}',
+            style: TextStyle(color: C.isDark ? C.orangeLight : C.orange, fontWeight: FontWeight.w700),
+          ),
         if (hint != null)
           TextSpan(
             text: '\n         ↳ $hint',

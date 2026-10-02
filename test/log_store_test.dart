@@ -43,6 +43,43 @@ void main() {
     expect(log.sessions.single.file!.readAsStringSync(), isNot(contains('secret.example')));
   });
 
+  test('одинаковые строки ядра не засоряют журнал: одна строка со счётчиком', () async {
+    final log = LogBuffer();
+    await log.open(dir);
+    log.startSession('Сервер');
+    // Так ядро пишет, когда программа раз за разом стучится на несуществующий адрес:
+    // меняются только время и номер соединения.
+    for (var i = 0; i < 40; i++) {
+      log.add('xray', '2026/10/02 23:16:${(10 + i).toString()}.842578 [Error] [${619022970 + i}] transport/internet: '
+          'failed to resolve ip > app/dns: returning nil for domain pubwxp.vivox.com > rcode: 3');
+    }
+    log.add('xray', '2026/10/02 23:17:01.000000 [Error] [1] transport/internet: failed to resolve ip > '
+        'app/dns: returning nil for domain other.example > rcode: 3');
+    // Строки самой программы не склеиваются: два «Подключено» — это два события.
+    log
+      ..add('app', 'Подключено')
+      ..add('app', 'Подключено');
+    final lines = log.lines;
+    expect(lines.map((l) => l.source).toList(), ['xray', 'xray', 'app', 'app']);
+    expect(lines[0].repeats, 40);
+    expect(lines[1].repeats, 1);
+    final session = log.current!;
+    // Счётчики отрезка считают строки, а не повторы; на диск повторы тоже не пишутся.
+    expect((session.count, session.errors, session.warnings), (4, 0, 2));
+    log.endSession();
+    expect('pubwxp.vivox.com'.allMatches(session.file!.readAsStringSync()).length, 1);
+
+    // В новом отрезке та же строка показывается заново.
+    log.startSession('Сервер');
+    log.add('xray', '[Error] [5] transport/internet: failed to resolve ip > app/dns: returning nil for domain '
+        'pubwxp.vivox.com > rcode: 3');
+    expect(log.lines.single.repeats, 1);
+    expect(LogExplain.of('xray', log.lines.single.text), contains('pubwxp.vivox.com'));
+    expect(LogExplain.of('xray', log.lines.single.text), contains('не существует'));
+    expect(log.lines.single.level, 1);
+    log.endSession();
+  });
+
   test('к строкам ядра есть пояснения простыми словами, к строкам программы — нет', () {
     expect(LogExplain.of('xray', '[Warning] core: Xray 26.9.30 started'), contains('запущено'));
     expect(LogExplain.of('xray', 'proxy/http: failed to read response from example.com > unexpected EOF'),

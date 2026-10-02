@@ -10,11 +10,20 @@ class LogLine {
   final String source;
   final String text;
 
+  /// Сколько раз подряд ядро написало эту же строку (см. [LogBuffer.add]): в журнале она одна, со счётчиком.
+  int repeats = 1;
+
+  /// Когда строка повторилась в последний раз.
+  late DateTime lastSeen = time;
+
   /// 2 — ошибка, 1 — предупреждение, 0 — обычная строка.
   late final int level = _levelOf(text);
 
   static int _levelOf(String text) {
     final t = text.toLowerCase();
+    // Программа спросила имя сайта, которого не существует. Ядро пишет это как ошибку, но VPN тут
+    // ни при чём — оставляем предупреждением.
+    if (t.contains('failed to resolve ip') && t.contains('rcode: 3')) return 1;
     // Ядро пишет «Error» и тогда, когда программа на компьютере просто закрыла своё соединение через
     // адаптер. Это не сбой VPN — в счётчик ошибок такие строки не идут.
     if (t.contains('proxy/tun: connection reset by peer') ||
@@ -295,6 +304,7 @@ class LogBuffer extends ChangeNotifier {
     }
     sessions.add(s);
     _current = s;
+    _recent.clear();
   }
 
   void _finish() {
@@ -327,19 +337,57 @@ class LogBuffer extends ChangeNotifier {
       if (t.trim().isEmpty) continue;
       if (_current == null) _begin(connection: false, title: 'Без подключения');
       final s = _current!;
-      final line = LogLine(source, t);
-      s.lines!.add(line);
-      if (s.lines!.length > maxLines) s.lines!.removeRange(0, s.lines!.length - maxLines);
-      s._count(line);
-      if (s._out != null && s._written < _fileLimit) {
-        try {
-          final row = '${line.time.toIso8601String()}\t$source\t$t\n';
-          s._out!.writeStringSync(row);
-          s._written += row.length;
-        } catch (_) {}
+      // Ядро может писать одну и ту же строку сотни раз (программа раз за разом стучится на адрес,
+      // которого нет). Повторы не добавляются — у первой строки растёт счётчик. Через [_repeatSpan]
+      // строка появляется заново, чтобы было видно, что это ещё продолжается.
+      if (source == 'xray' || source == 'sing-box') {
+        final key = '$source|${_sameLineKey(t)}';
+        final now = DateTime.now();
+        final shown = _recent[key];
+        if (shown != null &&
+            now.difference(shown.lastSeen) < _repeatGap &&
+            now.difference(shown.time) < _repeatSpan) {
+          shown
+            ..repeats += 1
+            ..lastSeen = now;
+          continue;
+        }
+        if (_recent.length > 300) _recent.clear();
+        final line = LogLine(source, t, now);
+        _recent[key] = line;
+        _append(s, line);
+        continue;
       }
+      _append(s, LogLine(source, t));
     }
     notifyListeners();
+  }
+
+  /// Строки ядер, показанные недавно: по ним узнаются повторы.
+  final _recent = <String, LogLine>{};
+
+  /// Повтором считается та же строка, пришедшая не позже чем через минуту после предыдущей…
+  static const _repeatGap = Duration(minutes: 1);
+
+  /// …и не дольше десяти минут подряд: потом строка показывается заново.
+  static const _repeatSpan = Duration(minutes: 10);
+
+  /// Строка без того, что меняется от раза к разу: времени ядра и номера соединения.
+  static String _sameLineKey(String text) => text
+      .replaceFirst(RegExp(r'^\d{4}[/-]\d{2}[/-]\d{2} \d{2}:\d{2}:\d{2}(\.\d+)? '), '')
+      .replaceAll(RegExp(r'\[\d+\] '), '');
+
+  void _append(LogSession s, LogLine line) {
+    s.lines!.add(line);
+    if (s.lines!.length > maxLines) s.lines!.removeRange(0, s.lines!.length - maxLines);
+    s._count(line);
+    if (s._out != null && s._written < _fileLimit) {
+      try {
+        final row = '${line.time.toIso8601String()}\t${line.source}\t${line.text}\n';
+        s._out!.writeStringSync(row);
+        s._written += row.length;
+      } catch (_) {}
+    }
   }
 
   /// Соединение программы (из журнала доступа Xray) — в текущий отрезок, только в память.
