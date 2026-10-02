@@ -160,10 +160,28 @@ class AppDropdown<T> extends StatelessWidget {
               if (leading != null) ...[leading!, const SizedBox(width: 12)],
               Flexible(
                 fit: expand ? FlexFit.tight : FlexFit.loose,
-                child: Text(items[value] ?? '$value',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: C.text, fontSize: 14, fontWeight: FontWeight.w600)),
+                // Новое значение проявляется на месте старого, а ширина кнопки плавно подстраивается под
+                // него — иначе при выборе надпись и рамка менялись рывком.
+                child: AnimatedSize(
+                  duration: const Duration(milliseconds: 260),
+                  curve: Curves.easeInOutCubic,
+                  alignment: Alignment.centerLeft,
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 220),
+                    switchInCurve: const Interval(0.35, 1, curve: Curves.easeOut),
+                    switchOutCurve: const Interval(0.35, 1, curve: Curves.easeIn),
+                    layoutBuilder: (current, previous) => Stack(
+                      alignment: Alignment.centerLeft,
+                      children: [...previous, if (current != null) current],
+                    ),
+                    child: Text(items[value] ?? '$value',
+                        key: ValueKey(value),
+                        maxLines: 1,
+                        softWrap: false,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: C.text, fontSize: 14, fontWeight: FontWeight.w600)),
+                  ),
+                ),
               ),
               const SizedBox(width: 8),
               Icon(Icons.expand_more_rounded, color: hovered ? C.orange : C.muted),
