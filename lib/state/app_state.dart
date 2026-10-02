@@ -152,12 +152,24 @@ class AppState extends ChangeNotifier {
 
     // Раз в минуту смотрим, не пора ли обновить подписки (проверка дешёвая — сравнение времени).
     _subsTimer = Timer.periodic(const Duration(minutes: 1), (_) => _updateDueSubscriptions());
-    if (settings.updateSubsOnStart) unawaited(_updateDueSubscriptions(force: true));
 
     await handleArgs(args);
     final wantConnect = args.contains('--connect') ||
         (settings.connectOnStart && (args.contains('--autostart') || args.contains('--elevated')));
-    if (wantConnect && selectedServer != null) unawaited(connect());
+    if (wantConnect && selectedServer != null) {
+      // Подписки обновляем после подключения, а не одновременно с ним: запросы, начатые напрямую,
+      // оборвались бы на полпути, когда трафик уходит в адаптер (а «рубильник» их просто не выпустит).
+      unawaited(() async {
+        try {
+          await connect();
+        } catch (_) {
+          // Нет прав администратора — об этом уже написано в журнале и на главной.
+        }
+        if (settings.updateSubsOnStart) await _updateDueSubscriptions(force: true);
+      }());
+    } else if (settings.updateSubsOnStart) {
+      unawaited(_updateDueSubscriptions(force: true));
+    }
   }
 
   /// true — файл данных есть, но прочитать его не удалось. Тогда ничего не сохраняем,
