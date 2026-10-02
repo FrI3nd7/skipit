@@ -17,7 +17,11 @@ class LogLine {
     final t = text.toLowerCase();
     // Ядро пишет «Error» и тогда, когда программа на компьютере просто закрыла своё соединение через
     // адаптер. Это не сбой VPN — в счётчик ошибок такие строки не идут.
-    if (t.contains('proxy/tun: connection reset by peer') || t.contains('proxy/tun: operation timed out')) return 0;
+    if (t.contains('proxy/tun: connection reset by peer') ||
+        t.contains('proxy/tun: connection was refused') ||
+        t.contains('proxy/tun: operation timed out')) {
+      return 0;
+    }
     if (t.contains('error') || t.contains('fatal') || t.contains('panic') || t.contains('ошибк') ||
         t.contains('сбой') || t.contains('не удалось')) {
       return 2;

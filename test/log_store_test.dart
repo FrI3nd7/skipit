@@ -54,6 +54,9 @@ void main() {
     const reset = '2026/10/02 02:09:32.664688 [Error] proxy/tun: connection reset by peer';
     expect(LogExplain.of('xray', reset), contains('сама оборвала'));
     expect(LogLine('xray', reset).level, 0);
+    const refused = '2026/10/02 19:42:50.569535 [Error] proxy/tun: connection was refused';
+    expect(LogExplain.of('xray', refused), contains('раньше, чем оно установилось'));
+    expect(LogLine('xray', refused).level, 0);
     expect(LogLine('xray', '[Error] app/dns: failed to retrieve response').level, 2);
     expect(
         LogExplain.of('xray', '[Warning] app/observatory/burst: error ping https://www.gstatic.com/generate_204 with proxy-2: Head: context deadline exceeded'),
