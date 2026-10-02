@@ -436,24 +436,31 @@ class PageHeader extends StatelessWidget {
   final Widget? below;
 
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.fromLTRB(28, 26, 28, 16),
-        child: Row(
-          children: [
-            Expanded(
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(title, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, letterSpacing: -0.5)),
-                if (subtitle != null) ...[
-                  const SizedBox(height: 4),
-                  Text(subtitle!, style: TextStyle(color: C.muted, fontSize: 13)),
-                ],
-                if (below != null) ...[const SizedBox(height: 14), below!],
+  Widget build(BuildContext context) {
+    final heading = Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Text(title, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, letterSpacing: -0.5)),
+      if (subtitle != null) ...[
+        const SizedBox(height: 4),
+        Text(subtitle!, style: TextStyle(color: C.muted, fontSize: 13)),
+      ],
+      if (below != null) ...[const SizedBox(height: 14), below!],
+    ]);
+    final buttons = Wrap(spacing: 8, runSpacing: 8, children: actions);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(28, 26, 28, 16),
+      child: LayoutBuilder(
+        // В узком окне кнопки уходят под заголовок: в одну строку с ним они оставляли заголовку
+        // несколько точек ширины, и он выстраивался по букве в строке.
+        builder: (context, c) => actions.isEmpty || c.maxWidth >= 680
+            ? Row(children: [Expanded(child: heading), buttons])
+            : Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                heading,
+                const SizedBox(height: 14),
+                buttons,
               ]),
-            ),
-            Wrap(spacing: 8, runSpacing: 8, children: actions),
-          ],
-        ),
-      );
+      ),
+    );
+  }
 }
 
 /// Кнопка с оранжевым градиентом; при наведении светится ярче.

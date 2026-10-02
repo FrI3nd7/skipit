@@ -24,9 +24,10 @@ constexpr UINT kCmdModeBase = 100;
 constexpr UINT kCmdCoreBase = 200;
 constexpr UINT kCmdServerBase = 1000;
 constexpr wchar_t kRegPlacement[] = L"WindowPlacement";
-// Наименьший размер окна при масштабе 100 %: боковое меню и главная в одну колонку помещаются целиком.
-constexpr int kMinWidth = 760;
-constexpr int kMinHeight = 560;
+// Наименьший размер окна при масштабе 100 %: с развёрнутым боковым меню помещается самая широкая
+// страница — «Логи» с двумя панелями. Проверяется тестом test/min_window_test.dart (числа там те же).
+constexpr int kMinWidth = 960;
+constexpr int kMinHeight = 600;
 
 // Положение окна тестовой сборки хранится отдельно от установленной программы.
 const wchar_t* RegKey() {
