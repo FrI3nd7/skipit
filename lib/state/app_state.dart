@@ -443,15 +443,29 @@ class AppState extends ChangeNotifier {
   Future<FetchedSubscription> _fetchSubscription(Subscription sub) async {
     const limit = Duration(seconds: 45);
     final viaProxy = isConnected && settings.updateViaProxy ? (_session ?? settings).httpPort : null;
-    if (viaProxy != null) {
+    // Пока VPN подключён, «напрямую» — это через ядро мимо VPN-сервера (см. XrayConfig.addDirectInbound):
+    // обычный запрос в режиме TUN ушёл бы в тот же туннель, а «рубильник» его не выпустил бы вовсе.
+    Future<FetchedSubscription> direct() =>
+        Net.fetchSubscription(sub.url, settings, proxyPort: isConnected ? _directPort : null).timeout(limit);
+    // Сервер подписки уже не ответил через VPN, а напрямую ответил — не ждём таймаута ещё раз.
+    if (viaProxy != null && !_subsDirectOnly.contains(sub.id)) {
       try {
         return await Net.fetchSubscription(sub.url, settings, proxyPort: viaProxy).timeout(limit);
       } catch (e) {
         log.add('subscription', '${sub.displayName}: через VPN не удалось ($e), пробую напрямую');
       }
+      final fetched = await direct();
+      _subsDirectOnly.add(sub.id);
+      return fetched;
     }
-    return Net.fetchSubscription(sub.url, settings).timeout(limit);
+    return direct();
   }
+
+  /// Подписки, чей сервер не отвечает через VPN, но отвечает напрямую (до перезапуска программы).
+  final _subsDirectOnly = <String>{};
+
+  /// Порт входа «мимо VPN-сервера» в текущем подключении (null — не подключены).
+  int? _directPort;
 
   Future<void> updateAllSubscriptions() => _updateDueSubscriptions(force: true);
 
@@ -810,6 +824,17 @@ class AppState extends ChangeNotifier {
       } else if (usesTun) {
         XrayConfig.addProxyAppRules(config, settings: session, apps: appRules);
       }
+      // Вход «мимо VPN-сервера» для обновления подписок: пропускает только адреса их серверов.
+      taken.add(session.apiPort);
+      var directPort = session.apiPort + 1;
+      while (taken.contains(directPort) || !await _portFree(directPort)) {
+        if (++directPort > session.apiPort + 200) throw CoreException('Не нашлось свободного порта для обновления подписок');
+      }
+      XrayConfig.addDirectInbound(config, port: directPort, settings: session, hosts: [
+        for (final s in subscriptions)
+          if ((Uri.tryParse(s.url)?.host ?? '').isNotEmpty) Uri.parse(s.url).host,
+      ]);
+      _directPort = directPort;
       _routes
         ..clear()
         ..addEntries([
@@ -991,6 +1016,7 @@ class AppState extends ChangeNotifier {
     await _singbox.stop();
     await _xray.stop();
     _session = null;
+    _directPort = null;
     _appliedAppRules = null;
     settings.lastXrayPid = settings.lastSingboxPid = null;
     await saveNow();

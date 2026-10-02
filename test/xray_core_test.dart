@@ -108,6 +108,17 @@ void main() {
             expect(rules.lastIndexOf(byProcess.last), rest - 1);
         }
 
+        // Вход «мимо VPN-сервера» для обновления подписок: первыми идут его правила — серверы подписок
+        // напрямую, всё остальное с этого входа блокируется.
+        XrayConfig.addDirectInbound(config,
+            port: 10814, hosts: ['sub.example.com', '203.0.113.5', 'sub.example.com'], settings: AppSettings());
+        final all = (config['routing'] as Map)['rules'] as List;
+        const directIn = [XrayConfig.directInTag];
+        expect(all[0], {'inboundTag': directIn, 'domain': ['full:sub.example.com'], 'outboundTag': 'skipit-direct'});
+        expect(all[1], {'inboundTag': directIn, 'ip': ['203.0.113.5'], 'outboundTag': 'skipit-direct'});
+        expect(all[2], {'inboundTag': directIn, 'outboundTag': 'skipit-block'});
+        expect((config['outbounds'] as List).where((o) => o['tag'] == 'skipit-direct').length, 1);
+
         final dir = await Directory.systemTemp.createTemp('skipit-xray-test');
         try {
           final file = File('${dir.path}\\config.json');

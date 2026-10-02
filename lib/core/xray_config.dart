@@ -488,6 +488,59 @@ class XrayConfig {
     ];
     cfg['routing'] = routing;
   }
+
+  static const directInTag = 'skipit-direct-in';
+
+  /// Локальный вход «мимо VPN-сервера»: через него программа обновляет подписку, когда через VPN
+  /// сервер подписки недоступен (некоторые провайдеры не пускают к нему запросы со своих же серверов).
+  /// Обычный запрос «напрямую» в режиме TUN всё равно уходит в адаптер, а при включённом «рубильнике»
+  /// не выходит вовсе; ядро же выходит в сеть мимо адаптера.
+  /// Вход пропускает только адреса из [hosts] (серверы подписок) — всё остальное блокируется, чтобы
+  /// другая программа на компьютере не могла ходить через него в обход VPN.
+  static void addDirectInbound(
+    Map<String, dynamic> cfg, {
+    required int port,
+    required List<String> hosts,
+    required AppSettings settings,
+  }) {
+    const direct = 'skipit-direct', block = 'skipit-block';
+    cfg['inbounds'] = [
+      ...(cfg['inbounds'] as List? ?? const []),
+      {
+        'tag': directInTag,
+        'protocol': 'http',
+        'listen': '127.0.0.1',
+        'port': port,
+        'settings': <String, dynamic>{},
+      },
+    ];
+    final outbounds = [...(cfg['outbounds'] as List)];
+    bool has(String tag) => outbounds.any((o) => o is Map && o['tag'] == tag);
+    if (!has(direct)) {
+      outbounds.add({
+        'tag': direct,
+        'protocol': 'freedom',
+        'streamSettings': {
+          'sockopt': {'domainStrategy': settings.ipv6 ? 'UseIP' : 'UseIPv4'},
+        },
+      });
+    }
+    if (!has(block)) outbounds.add({'tag': block, 'protocol': 'blackhole'});
+    cfg['outbounds'] = outbounds;
+
+    final routing = (cfg['routing'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final domains = [for (final h in hosts.toSet()) if (InternetAddress.tryParse(h) == null) 'full:$h'];
+    final ips = [for (final h in hosts.toSet()) if (InternetAddress.tryParse(h) != null) h];
+    const inbound = [directInTag];
+    routing['rules'] = [
+      if (domains.isNotEmpty) {'inboundTag': inbound, 'domain': domains, 'outboundTag': direct},
+      if (ips.isNotEmpty) {'inboundTag': inbound, 'ip': ips, 'outboundTag': direct},
+      {'inboundTag': inbound, 'outboundTag': block},
+      ...(routing['rules'] as List? ?? const []),
+    ];
+    cfg['routing'] = routing;
+  }
+
   /// Конфиг для проверки задержки: на каждый сервер свой HTTP-inbound на своём порту.
   static Map<String, dynamic> buildTest(List<ServerProfile> servers, int basePort) {
     final inbounds = <Map<String, dynamic>>[];
