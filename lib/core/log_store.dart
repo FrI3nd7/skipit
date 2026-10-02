@@ -22,6 +22,8 @@ class LogLine {
         t.contains('proxy/tun: operation timed out')) {
       return 0;
     }
+    // Проверка интернета по IPv6, которую делает сама Windows: при выключенном IPv6 она не проходит всегда.
+    if (t.contains('ipv6.msftncsi.com') || t.contains('ipv6.msftconnecttest.com')) return 0;
     if (t.contains('error') || t.contains('fatal') || t.contains('panic') || t.contains('ошибк') ||
         t.contains('сбой') || t.contains('не удалось')) {
       return 2;

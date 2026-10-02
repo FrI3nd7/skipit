@@ -45,8 +45,14 @@ void main() {
 
   test('к строкам ядра есть пояснения простыми словами, к строкам программы — нет', () {
     expect(LogExplain.of('xray', '[Warning] core: Xray 26.9.30 started'), contains('запущено'));
-    expect(LogExplain.of('xray', 'proxy/http: failed to read response from ipv6.msftconnecttest.com > unexpected EOF'),
-        contains('ipv6.msftconnecttest.com'));
+    expect(LogExplain.of('xray', 'proxy/http: failed to read response from example.com > unexpected EOF'),
+        contains('example.com'));
+    // Проверка интернета по IPv6, которую делает сама Windows: своё пояснение, и это не предупреждение.
+    const ncsi = '2026/10/02 21:29:14.960610 [Warning] [1537693391] proxy/http: failed to read response from '
+        'ipv6.msftncsi.com > unexpected EOF';
+    expect(LogExplain.of('xray', ncsi), contains('Windows проверяет'));
+    expect(LogExplain.of('xray', ncsi.replaceFirst('msftncsi', 'msftconnecttest')), contains('Windows проверяет'));
+    expect(LogLine('xray', ncsi).level, 0);
     expect(LogExplain.of('xray', 'The "freedom.domainStrategy" setting is deprecated'), contains('устаревший'));
     expect(LogExplain.of('sing-box', 'open interface take too much time'), contains('адаптер'));
     expect(LogExplain.of('app', 'Ошибка подключения: timeout'), isNull);
