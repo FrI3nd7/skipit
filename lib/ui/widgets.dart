@@ -744,7 +744,16 @@ class _SegmentedState<T> extends State<Segmented<T>> {
     final stack = _stackKey.currentContext?.findRenderObject() as RenderBox?;
     final item = _keys[widget.value]?.currentContext?.findRenderObject() as RenderBox?;
     if (stack == null || item == null || !stack.hasSize || !item.hasSize) return;
-    final rect = item.localToGlobal(Offset.zero, ancestor: stack) & item.size;
+    final raw = item.localToGlobal(Offset.zero, ancestor: stack) & item.size;
+    // Края плашки ставятся ровно на точки экрана. Ширина пунктов зависит от текста, и край обычно
+    // попадает между точками (особенно при масштабе экрана 125–150 %): такая точка закрашивается
+    // наполовину, и вдоль края плашки видна тёмно-оранжевая полоска.
+    final ratio = View.of(context).devicePixelRatio;
+    final origin = stack.localToGlobal(Offset.zero);
+    double snap(double v) => (v * ratio).roundToDouble() / ratio;
+    final onScreen = raw.shift(origin);
+    final rect = Rect.fromLTRB(snap(onScreen.left), snap(onScreen.top), snap(onScreen.right), snap(onScreen.bottom))
+        .shift(-origin);
     if (rect == _thumb) return;
     setState(() {
       _animate = _thumb != null;
