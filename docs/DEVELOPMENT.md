@@ -21,6 +21,10 @@ powershell -ExecutionPolicy Bypass -File tools\dev.ps1                       # �
 Результат сборки — `build\installer\SkipIt-Setup-Windows-1.0.4a.exe` и файл `.sha256` с его контрольной суммой.
 Тесты: `flutter test`. Иконка пересобирается скриптом `tools\make_icon.ps1`.
 
+Тест `min_window_test.dart` отрисовывает каждую страницу в окне наименьшего размера. Чтобы посмотреть
+на них глазами, сохраните картинки в папку:
+`flutter test test\min_window_test.dart --update-goldens --dart-define=SKIPIT_SHOTS=C:\Temp\shots`.
+
 ### Тестовая копия
 
 `tools\dev.ps1` собирает программу в `build\dev` и запускает её как **SkipIt Dev**. У неё всё своё:
