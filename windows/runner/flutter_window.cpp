@@ -24,6 +24,9 @@ constexpr UINT kCmdModeBase = 100;
 constexpr UINT kCmdCoreBase = 200;
 constexpr UINT kCmdServerBase = 1000;
 constexpr wchar_t kRegPlacement[] = L"WindowPlacement";
+// Наименьший размер окна при масштабе 100 %: боковое меню и главная в одну колонку помещаются целиком.
+constexpr int kMinWidth = 760;
+constexpr int kMinHeight = 560;
 
 // Положение окна тестовой сборки хранится отдельно от установленной программы.
 const wchar_t* RegKey() {
@@ -339,6 +342,15 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
   }
 
   switch (message) {
+    case WM_GETMINMAXINFO: {
+      // Меньше этого окно не сжимается: иначе интерфейс разваливается (подписи в столбик, пустая полоска).
+      // Размер задан для масштаба 100 % и умножается на масштаб монитора.
+      const double scale = GetDpiForWindow(hwnd) / 96.0;
+      auto* info = reinterpret_cast<MINMAXINFO*>(lparam);
+      info->ptMinTrackSize.x = static_cast<LONG>(kMinWidth * scale);
+      info->ptMinTrackSize.y = static_cast<LONG>(kMinHeight * scale);
+      return 0;
+    }
     case WM_ENTERSIZEMOVE:
       in_size_move_ = true;
       break;
