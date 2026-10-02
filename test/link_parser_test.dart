@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:skipit/core/icons.dart';
 import 'package:skipit/core/link_parser.dart';
 import 'package:skipit/core/singbox_config.dart';
 import 'package:skipit/core/updates.dart';
@@ -96,6 +98,11 @@ void main() {
     });
     expect(rules.enabledMatches, ['C:/Users/user/AppData/Local/Discord/', 'Telegram']);
     expect(rules.entries.first.label, 'Discord');
+    // Прежний путь остаётся файлом для значка и переживает сохранение.
+    expect(rules.entries.first.exe, 'C:/Users/user/AppData/Local/Discord/app-1.0.9163/Discord.exe');
+    expect(rules.entries.first.iconExe, rules.entries.first.exe);
+    expect(AppRules.fromJson(rules.toJson()).entries.first.exe, rules.entries.first.exe);
+    expect(rules.entries.last.iconExe, isNull);
 
     // Папка превращается в правило для sing-box, которое ловит любую версию программы.
     final s = SingboxConfig.build(
@@ -108,6 +115,23 @@ void main() {
     expect(regex.hasMatch(r'C:\Users\user\AppData\Local\Discord\app-1.0.9999\Discord.exe'), isTrue);
     expect(regex.hasMatch(r'c:\users\user\appdata\local\discord\Update.exe'), isTrue);
     expect(regex.hasMatch(r'C:\Users\user\AppData\Local\DiscordPTB\app-1.0.1\Discord.exe'), isFalse);
+  });
+
+  test('Файл программы для значка находится в свежей папке версии', () async {
+    final root = await Directory.systemTemp.createTemp('skipit-icons');
+    try {
+      for (final v in ['app-1.0.1', 'app-1.0.2']) {
+        await File('${root.path}\\$v\\Discord.exe').create(recursive: true);
+      }
+      await File('${root.path}\\Update.exe').create();
+      final folder = '${root.path.replaceAll('\\', '/')}/';
+      expect(await IconCache.findExe(folder, 'Discord.exe'), '${folder}app-1.0.2/Discord.exe');
+      expect(await IconCache.findExe(folder, 'Update.exe'), '${folder}Update.exe');
+      expect(await IconCache.findExe(folder, 'Nope.exe'), isNull);
+      expect(await IconCache.findExe('${folder}missing/', 'Discord.exe'), isNull);
+    } finally {
+      await root.delete(recursive: true);
+    }
   });
 
   test('Названия для меню трея: без флагов и эмодзи', () {

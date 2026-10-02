@@ -20,6 +20,7 @@ class AppEntry {
     required this.label,
     this.action = AppAction.proxy,
     this.enabled = true,
+    this.exe,
   }) : id = id ?? newId();
 
   final String id;
@@ -30,6 +31,15 @@ class AppEntry {
   String label;
   AppAction action;
   bool enabled;
+
+  /// Файл программы, из которого берётся значок, когда правило хранит её папку (см. [matchForExe]).
+  /// На само правило не влияет. После обновления программы файл может переехать в новую папку
+  /// версии — тогда окно находит его заново.
+  String? exe;
+
+  /// Файл для значка записи: выбранный exe или сам путь правила; у папки без программы и у имени
+  /// процесса его нет.
+  String? get iconExe => exe ?? (isPath && !isFolder ? match : null);
 
   bool get isFolder => match.endsWith('/');
   bool get isPath => match.contains('/');
@@ -71,6 +81,7 @@ class AppEntry {
         'label': label,
         'action': action.name,
         'enabled': enabled,
+        if (exe != null) 'exe': exe,
       };
 
   factory AppEntry.fromJson(Map<String, dynamic> j) => AppEntry(
@@ -79,6 +90,7 @@ class AppEntry {
         label: j['label'] as String? ?? '',
         action: AppAction.values.asNameMap()[j['action']] ?? AppAction.proxy,
         enabled: parseBool(j['enabled'], true),
+        exe: j['exe'] as String?,
       );
 }
 
@@ -114,7 +126,12 @@ class AppRules {
     for (final e in ((j['entries'] as List?) ?? const []).whereType<Map<String, dynamic>>().map(AppEntry.fromJson)) {
       // Записи прежних версий с путём в папку версии (см. [AppEntry.matchForExe]) переводятся на папку
       // программы; получившиеся повторы (сама программа и её помощник) сливаются в одну запись.
-      if (e.isPath && !e.isFolder) e.match = AppEntry.matchForExe(e.match);
+      if (e.isPath && !e.isFolder) {
+        final stable = AppEntry.matchForExe(e.match);
+        // Прежний путь остаётся как файл для значка.
+        if (stable != e.match) e.exe ??= e.match;
+        e.match = stable;
+      }
       if (entries.every((x) => x.match.toLowerCase() != e.match.toLowerCase())) entries.add(e);
     }
     return AppRules(mode: AppRoutingMode.values.asNameMap()[j['mode']] ?? AppRoutingMode.off, entries: entries);

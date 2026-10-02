@@ -30,23 +30,41 @@ class _AppsPageState extends State<AppsPage> {
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    final paths = AppScope.of(context).appRules.entries.where((e) => e.isPath && !e.isFolder).map((e) => e.match).toList();
-    final key = paths.join('|');
+    final state = AppScope.of(context);
+    final entries = state.appRules.entries;
+    final key = entries.map((e) => '${e.match}>${e.exe}').join('|');
     if (key == _iconsFor) return;
     _iconsFor = key;
-    IconCache.ensure(paths).then((_) {
-      if (mounted) setState(() {});
-    });
+    _loadIcons(state, List.of(entries));
+  }
+
+  Future<void> _loadIcons(AppState state, List<AppEntry> entries) async {
+    // Запись хранит папку программы (она обновляется сама): значок берётся из её exe. Если его путь
+    // ещё не известен или программа обновилась и файл переехал — ищем его в папке заново.
+    var found = false;
+    for (final e in entries.where((e) => e.isFolder)) {
+      final exe = e.exe;
+      if (exe != null && (IconCache.has(exe) || File(exe.replaceAll('/', '\\')).existsSync())) continue;
+      final name = exe?.split('/').last ?? '${e.label}.exe';
+      if (name.contains(RegExp(r'[\\/:]'))) continue;
+      final path = await IconCache.findExe(e.match, name);
+      if (path == null || path == exe) continue;
+      e.exe = path;
+      found = true;
+    }
+    if (found) state.save();
+    await IconCache.ensure([for (final e in entries) if (e.iconExe != null) e.iconExe!]);
+    if (mounted) setState(() {});
   }
 
   void _touch(AppState state) => state.changed();
 
   /// Добавляет программы в список; уже добавленные пропускает. Возвращает, сколько добавлено.
-  int _addEntries(AppState state, List<({String match, String label})> items) {
+  int _addEntries(AppState state, List<({String match, String label, String? exe})> items) {
     var added = 0;
     for (final item in items) {
       if (state.appRules.entries.any((e) => e.match.toLowerCase() == item.match.toLowerCase())) continue;
-      state.appRules.entries.add(AppEntry(match: item.match, label: item.label));
+      state.appRules.entries.add(AppEntry(match: item.match, label: item.label, exe: item.exe));
       added++;
     }
     if (added == 0) {
@@ -69,8 +87,15 @@ class _AppsPageState extends State<AppsPage> {
       ),
     );
     if (chosen != null && chosen.isNotEmpty) {
-      _addEntries(state, [for (final a in chosen) (match: AppEntry.matchForExe(a.path), label: a.name)]);
+      _addEntries(state, [for (final a in chosen) _entryForExe(a.path, a.name)]);
     }
+  }
+
+  /// Запись для выбранного exe. Если правилом стала папка программы, сам файл запоминается для значка.
+  static ({String match, String label, String? exe}) _entryForExe(String path, String label) {
+    final file = AppEntry.normalizePath(path);
+    final match = AppEntry.matchForExe(path);
+    return (match: match, label: label, exe: match == file ? null : file);
   }
 
   @override
@@ -101,7 +126,7 @@ class _AppsPageState extends State<AppsPage> {
           icon: Icons.folder_open_rounded,
           onPressed: () async {
             final dir = await WinSys.pickFolder();
-            if (dir != null) _addEntries(state, [(match: AppEntry.normalizeFolder(dir), label: dir)]);
+            if (dir != null) _addEntries(state, [(match: AppEntry.normalizeFolder(dir), label: dir, exe: null)]);
           },
         ),
         GhostButton(
@@ -110,7 +135,7 @@ class _AppsPageState extends State<AppsPage> {
           onPressed: () async {
             final name = await promptText(context, title: 'Имя процесса', hint: 'Например: Telegram или chrome.exe');
             if (name != null && name.trim().isNotEmpty) {
-              _addEntries(state, [(match: AppEntry.nameFromPath(name.trim()), label: name.trim())]);
+              _addEntries(state, [(match: AppEntry.nameFromPath(name.trim()), label: name.trim(), exe: null)]);
             }
           },
         ),
@@ -120,7 +145,7 @@ class _AppsPageState extends State<AppsPage> {
           onPressed: () async {
             final path = await WinSys.pickFile(filter: 'Программы (*.exe)|*.exe');
             if (path != null) {
-              _addEntries(state, [(match: AppEntry.matchForExe(path), label: AppEntry.nameFromPath(path))]);
+              _addEntries(state, [_entryForExe(path, AppEntry.nameFromPath(path))]);
             }
           },
         ),
@@ -217,7 +242,7 @@ class _AppsPageState extends State<AppsPage> {
                       child: Row(children: [
                         Opacity(
                           opacity: e.enabled ? 1 : 0.4,
-                          child: AppIcon(path: e.isPath ? e.match : null, folder: e.isFolder),
+                          child: AppIcon(path: e.iconExe, folder: e.isFolder),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
@@ -428,7 +453,8 @@ class AppIcon extends StatelessWidget {
           child: Icon(folder ? Icons.folder_rounded : Icons.web_asset_rounded, size: size * 0.62, color: C.orange),
         );
     final p = path;
-    if (folder || p == null || !IconCache.has(p)) return fallback();
+    // У папки программы значок есть (берётся из её exe); у обычной папки пути нет — рисуется запасной.
+    if (p == null || !IconCache.has(p)) return fallback();
     return Image.file(
       File(IconCache.fileFor(p)),
       width: size,

@@ -21,6 +21,27 @@ class IconCache {
 
   static bool has(String exePath) => File(fileFor(exePath)).existsSync();
 
+  /// Файл программы внутри её папки: в самой папке или в самой свежей папке версии (`app-1.2.3`).
+  /// Нужен программам, которые обновляются сами: после обновления exe лежит уже в другой папке версии.
+  /// Возвращает путь с прямыми слэшами или null, если такого файла нет.
+  static Future<String?> findExe(String folder, String fileName) async {
+    try {
+      final dir = Directory(folder.replaceAll('/', '\\').replaceFirst(RegExp(r'\\+$'), ''));
+      if (!await dir.exists()) return null;
+      final versions = [
+        await for (final e in dir.list())
+          if (e is Directory && RegExp(r'^app-\d', caseSensitive: false).hasMatch(e.path.split('\\').last)) e.path,
+      ]..sort();
+      for (final where in [...versions.reversed, dir.path]) {
+        final file = File('$where\\$fileName');
+        if (await file.exists()) return file.path.replaceAll('\\', '/');
+      }
+    } catch (_) {
+      // Нет доступа к папке — значок останется запасным.
+    }
+    return null;
+  }
+
   /// Извлекает недостающие иконки одним вызовом PowerShell.
   static Future<void> ensure(Iterable<String> exePaths) async {
     final missing = <Map<String, String>>[];
