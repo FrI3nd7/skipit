@@ -74,6 +74,41 @@ void main() {
     expect(rules.any((r) => (r as Map)['process_name']?.contains('Telegram.exe') == true), isTrue);
   });
 
+  test('Программа с само-обновлением добавляется папкой, а не путём к версии', () {
+    // Discord после обновления лежит уже в другой папке app-…: правило по пути перестало бы совпадать.
+    const discord = r'C:\Users\user\AppData\Local\Discord\app-1.0.9260\Discord.exe';
+    const helper = r'C:\Users\user\AppData\Local\Discord\app-1.0.9260\modules\discord_utils-1\DiscordSystemHelper.exe';
+    expect(AppEntry.matchForExe(discord), 'C:/Users/user/AppData/Local/Discord/');
+    expect(AppEntry.matchForExe(helper), 'C:/Users/user/AppData/Local/Discord/');
+    // Обычные программы остаются правилом по пути к файлу.
+    expect(AppEntry.matchForExe(r'C:\Apps\Steam\steam.exe'), 'C:/Apps/Steam/steam.exe');
+    expect(AppEntry.matchForExe(r'D:\app-store\tool.exe'), 'D:/app-store/tool.exe');
+
+    // Записи, сохранённые прежними версиями, исправляются при загрузке; повторы сливаются.
+    final rules = AppRules.fromJson({
+      'mode': 'onlySelected',
+      'entries': [
+        {'match': 'C:/Users/user/AppData/Local/Discord/app-1.0.9163/Discord.exe', 'label': 'Discord'},
+        {'match': 'C:/Users/user/AppData/Local/Discord/app-1.0.9163/modules/x/DiscordSystemHelper.exe', 'label': 'Helper'},
+        {'match': 'Telegram', 'label': 'Telegram'},
+      ],
+    });
+    expect(rules.enabledMatches, ['C:/Users/user/AppData/Local/Discord/', 'Telegram']);
+    expect(rules.entries.first.label, 'Discord');
+
+    // Папка превращается в правило для sing-box, которое ловит любую версию программы.
+    final s = SingboxConfig.build(
+        settings: AppSettings(), routing: RoutingProfile.global(), apps: rules, serverDomains: const []);
+    final rule = ((s['route'] as Map)['rules'] as List).firstWhere((r) => (r as Map)['process_path_regex'] != null) as Map;
+    // sing-box понимает пометку (?i) «без учёта регистра», Dart — нет: здесь она задаётся отдельно.
+    final pattern = (rule['process_path_regex'] as List).single as String;
+    expect(pattern, startsWith('(?i)'));
+    final regex = RegExp(pattern.substring(4), caseSensitive: false);
+    expect(regex.hasMatch(r'C:\Users\user\AppData\Local\Discord\app-1.0.9999\Discord.exe'), isTrue);
+    expect(regex.hasMatch(r'c:\users\user\appdata\local\discord\Update.exe'), isTrue);
+    expect(regex.hasMatch(r'C:\Users\user\AppData\Local\DiscordPTB\app-1.0.1\Discord.exe'), isFalse);
+  });
+
   test('Сравнение версий', () {
     expect(Updates.compare('26.3.27', '26.3.9'), 1);
     expect(Updates.compare('v1.14.2', '1.14.2'), 0);

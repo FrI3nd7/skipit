@@ -65,11 +65,11 @@ class _AppsPageState extends State<AppsPage> {
       context: context,
       builder: (ctx) => _RunningAppsDialog(
         apps: apps,
-        isAdded: (a) => already.contains(AppEntry.normalizePath(a.path).toLowerCase()),
+        isAdded: (a) => already.contains(AppEntry.matchForExe(a.path).toLowerCase()),
       ),
     );
     if (chosen != null && chosen.isNotEmpty) {
-      _addEntries(state, [for (final a in chosen) (match: AppEntry.normalizePath(a.path), label: a.name)]);
+      _addEntries(state, [for (final a in chosen) (match: AppEntry.matchForExe(a.path), label: a.name)]);
     }
   }
 
@@ -120,7 +120,7 @@ class _AppsPageState extends State<AppsPage> {
           onPressed: () async {
             final path = await WinSys.pickFile(filter: 'Программы (*.exe)|*.exe');
             if (path != null) {
-              _addEntries(state, [(match: AppEntry.normalizePath(path), label: AppEntry.nameFromPath(path))]);
+              _addEntries(state, [(match: AppEntry.matchForExe(path), label: AppEntry.nameFromPath(path))]);
             }
           },
         ),

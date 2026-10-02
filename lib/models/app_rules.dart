@@ -46,6 +46,20 @@ class AppEntry {
     return s.replaceAll('\\', '/');
   }
 
+  /// Папка версии у программ, которые обновляются сами (Discord, Slack, Figma и другие): `app-1.0.9260`.
+  static final _versionDir = RegExp(r'^app-\d+(\.\d+)+$', caseSensitive: false);
+
+  /// Правило для программы, выбранной по её exe. Обычно это путь к файлу. Но у программ, которые
+  /// обновляются сами, exe лежит в папке версии, и после обновления путь меняется — правило перестало
+  /// бы совпадать, а программа молча пошла бы мимо него. Для них берётся папка программы целиком
+  /// (`…/Discord/app-1.0.9260/Discord.exe` → `…/Discord/`): она не меняется и включает помощников.
+  static String matchForExe(String path) {
+    final s = normalizePath(path);
+    final parts = s.split('/');
+    final i = parts.indexWhere(_versionDir.hasMatch);
+    return i > 0 ? '${parts.take(i).join('/')}/' : s;
+  }
+
   static String normalizeFolder(String path) {
     final s = normalizePath(path);
     return s.endsWith('/') ? s : '$s/';
@@ -95,11 +109,14 @@ class AppRules {
         'entries': entries.map((e) => e.toJson()).toList(),
       };
 
-  factory AppRules.fromJson(Map<String, dynamic> j) => AppRules(
-        mode: AppRoutingMode.values.asNameMap()[j['mode']] ?? AppRoutingMode.off,
-        entries: ((j['entries'] as List?) ?? const [])
-            .whereType<Map<String, dynamic>>()
-            .map(AppEntry.fromJson)
-            .toList(),
-      );
+  factory AppRules.fromJson(Map<String, dynamic> j) {
+    final entries = <AppEntry>[];
+    for (final e in ((j['entries'] as List?) ?? const []).whereType<Map<String, dynamic>>().map(AppEntry.fromJson)) {
+      // Записи прежних версий с путём в папку версии (см. [AppEntry.matchForExe]) переводятся на папку
+      // программы; получившиеся повторы (сама программа и её помощник) сливаются в одну запись.
+      if (e.isPath && !e.isFolder) e.match = AppEntry.matchForExe(e.match);
+      if (entries.every((x) => x.match.toLowerCase() != e.match.toLowerCase())) entries.add(e);
+    }
+    return AppRules(mode: AppRoutingMode.values.asNameMap()[j['mode']] ?? AppRoutingMode.off, entries: entries);
+  }
 }
