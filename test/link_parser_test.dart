@@ -8,6 +8,7 @@ import 'package:skipit/core/xray_config.dart';
 import 'package:skipit/models/app_rules.dart';
 import 'package:skipit/models/routing.dart';
 import 'package:skipit/models/settings.dart';
+import 'package:skipit/ui/flag_text.dart';
 
 void main() {
   test('VLESS Reality', () {
@@ -107,6 +108,16 @@ void main() {
     expect(regex.hasMatch(r'C:\Users\user\AppData\Local\Discord\app-1.0.9999\Discord.exe'), isTrue);
     expect(regex.hasMatch(r'c:\users\user\appdata\local\discord\Update.exe'), isTrue);
     expect(regex.hasMatch(r'C:\Users\user\AppData\Local\DiscordPTB\app-1.0.1\Discord.exe'), isFalse);
+  });
+
+  test('Названия для меню трея: без флагов и эмодзи', () {
+    expect(Flags.forTray('Auto → [🚀 Оптимальная локация]'), 'Auto → [Оптимальная локация]');
+    expect(Flags.forTray('🇩🇪 Germany'), 'Germany');
+    expect(Flags.forTray('Russia - 1 [Сотовая связь]'), 'Russia - 1 [Сотовая связь]');
+    expect(Flags.forTray('⚡️ Fast 👨‍👩‍👧 server ✈'), 'Fast server');
+    // Стрелка и прочие обычные знаки остаются; название из одних эмодзи не становится пустым.
+    expect(Flags.forTray('A → B'), 'A → B');
+    expect(Flags.forTray('🚀'), '🚀');
   });
 
   test('Сравнение версий', () {

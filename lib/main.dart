@@ -164,7 +164,7 @@ Future<void> main(List<String> rawArgs) async {
   final flagsDir = '${File(Platform.resolvedExecutable).parent.path}\\data\\flutter_assets\\assets\\flags';
   void syncTray() {
     final name = state.selectedServer?.name;
-    final server = name == null ? null : Flags.toPlain(name);
+    final server = name == null ? null : Flags.forTray(name);
     final status = switch (state.status) {
       ConnStatus.connected => 'Подключено',
       ConnStatus.connecting => 'Подключение…',
@@ -184,7 +184,7 @@ Future<void> main(List<String> rawArgs) async {
     // Провайдер каждого сервера — для заголовков в списке. Если провайдер один, заголовки не нужны.
     String groupOf(ServerProfile s) {
       final sub = state.subscriptionById(s.subscriptionId);
-      return sub == null ? 'Свои серверы' : Flags.toPlain(sub.displayName);
+      return sub == null ? 'Свои серверы' : Flags.forTray(sub.displayName);
     }
 
     final groups = [for (final s in servers) groupOf(s)];
@@ -214,7 +214,7 @@ Future<void> main(List<String> rawArgs) async {
             final (country, rest) = Flags.leading(s.name);
             final flag = country == null ? '' : '$flagsDir\\$country.png';
             return {
-              'name': Flags.toPlain(rest),
+              'name': Flags.forTray(rest),
               'flag': flag.isNotEmpty && File(flag).existsSync() ? flag : '',
               'group': grouped ? groups[i] : '',
             };

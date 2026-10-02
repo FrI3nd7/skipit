@@ -47,6 +47,27 @@ class Flags {
   static String toPlain(String input) =>
       split(input).map((p) => p.text ?? '').join().replaceAll(RegExp(r'\s{2,}'), ' ').trim();
 
+  /// Эмодзи и их служебные символы (соединитель, выбор начертания, оттенки кожи, «клавиши»).
+  static final _emoji = RegExp(
+    '[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{2300}-\u{23FF}\u{FE00}-\u{FE0F}\u{E0020}-\u{E007F}‍⃣]',
+    unicode: true,
+  );
+
+  /// Для меню значка в трее: оно рисуется средствами Windows без цветного шрифта эмодзи, и на месте
+  /// каждого эмодзи получался пустой квадратик. Флаги и эмодзи убираются, текст остаётся:
+  /// «Auto → [🚀 Оптимальная]» → «Auto → [Оптимальная]».
+  static String forTray(String input) {
+    final plain = toPlain(input);
+    final text = plain
+        .replaceAll(_emoji, '')
+        .replaceAll(RegExp(r'\s{2,}'), ' ')
+        .replaceAllMapped(RegExp(r'([\[(«])\s+'), (m) => m.group(1)!)
+        .replaceAllMapped(RegExp(r'\s+([\])»])'), (m) => m.group(1)!)
+        .trim();
+    // Название из одних эмодзи остаётся как есть: квадратик лучше пустой строки.
+    return text.isEmpty ? plain : text;
+  }
+
   /// Текст с флагами-картинками для Text.rich / Tooltip.richMessage.
   static InlineSpan span(String text, {TextStyle? style, double size = 13}) {
     final parts = split(text);
