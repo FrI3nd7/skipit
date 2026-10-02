@@ -18,8 +18,16 @@ String describeNetError(Object e) {
     return 'Нет соединения с сервером — проверьте интернет';
   }
   if (e is HandshakeException) return 'Не удалось установить защищённое соединение с сервером';
-  return e.toString().replaceFirst(RegExp(r'^(Http)?Exception: '), '');
+  return scrubUrls(e.toString().replaceFirst(RegExp(r'^(Http)?Exception: '), ''));
 }
+
+/// Оставляет от адресов в тексте только имя сервера. В ссылке на подписку путь и параметры — это ключ
+/// доступа к VPN, а сетевые ошибки печатают адрес целиком («…, uri = https://…/sub/КЛЮЧ»): в журнал
+/// на диске и в окно такой текст попадать не должен.
+String scrubUrls(String text) => text.replaceAllMapped(
+      RegExp(r'(https?://)([^/\s,;)]+)[^\s,;)]*', caseSensitive: false),
+      (m) => '${m[1]}${m[2]!.split('@').last}/…',
+    );
 String newId() =>
     '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
     '${_random.nextInt(0x7fffffff).toRadixString(36)}';

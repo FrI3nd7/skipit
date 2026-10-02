@@ -68,11 +68,38 @@ DWORD AddFilter(const Context& c, const GUID& layer, UINT8 weight, bool permit,
   return FwpmFilterAdd0(c.engine, &filter, nullptr, nullptr);
 }
 
-// Фильтры одного слоя (исходящие соединения IPv4 или IPv6).
-std::wstring AddLayer(const Context& c, bool v6, const std::vector<FWP_BYTE_BLOB*>& apps,
+// Фильтры одного слоя: исходящие или входящие (|inbound|) соединения IPv4 или IPv6.
+// Входящие закрываются так же, как исходящие: иначе программа, которая сама принимает подключения
+// (торрент-клиент, игровой сервер), продолжала бы обмениваться данными через обычную сеть.
+std::wstring AddLayer(const Context& c, bool v6, bool inbound, const std::vector<FWP_BYTE_BLOB*>& apps,
                       const std::wstring& tun) {
-  const GUID& layer = v6 ? FWPM_LAYER_ALE_AUTH_CONNECT_V6 : FWPM_LAYER_ALE_AUTH_CONNECT_V4;
+  const GUID& layer = inbound ? (v6 ? FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V6 : FWPM_LAYER_ALE_AUTH_RECV_ACCEPT_V4)
+                              : (v6 ? FWPM_LAYER_ALE_AUTH_CONNECT_V6 : FWPM_LAYER_ALE_AUTH_CONNECT_V4);
   DWORD rc;
+
+  if (inbound) {
+    // Ответы сервера, который раздаёт компьютеру адрес (DHCP): он может быть и не из локальной сети —
+    // без них компьютер со временем остался бы без адреса и без сети вообще.
+    FWPM_FILTER_CONDITION0 conds[2]{};
+    conds[0].fieldKey = FWPM_CONDITION_IP_PROTOCOL;
+    conds[0].matchType = FWP_MATCH_EQUAL;
+    conds[0].conditionValue.type = FWP_UINT8;
+    conds[0].conditionValue.uint8 = IPPROTO_UDP;
+    conds[1].fieldKey = FWPM_CONDITION_IP_LOCAL_PORT;
+    conds[1].matchType = FWP_MATCH_EQUAL;
+    conds[1].conditionValue.type = FWP_UINT16;
+    conds[1].conditionValue.uint16 = v6 ? 546 : 68;
+    if ((rc = AddFilter(c, layer, kWeightCores, true, conds, 2)) != ERROR_SUCCESS) return Error(L"dhcp", rc);
+    if (v6) {
+      // Служебные сообщения IPv6 (поиск соседей и роутера): без них IPv6 в локальной сети не работает.
+      FWPM_FILTER_CONDITION0 icmp{};
+      icmp.fieldKey = FWPM_CONDITION_IP_PROTOCOL;
+      icmp.matchType = FWP_MATCH_EQUAL;
+      icmp.conditionValue.type = FWP_UINT8;
+      icmp.conditionValue.uint8 = IPPROTO_ICMPV6;
+      if ((rc = AddFilter(c, layer, kWeightCores, true, &icmp, 1)) != ERROR_SUCCESS) return Error(L"icmp6", rc);
+    }
+  }
 
   // Ядра VPN: им нужен выход в сеть мимо адаптера — до сервера и для трафика «напрямую».
   for (FWP_BYTE_BLOB* app : apps) {
@@ -116,7 +143,7 @@ std::wstring AddLayer(const Context& c, bool v6, const std::vector<FWP_BYTE_BLOB
   }
 
   // DNS мимо адаптера — нельзя даже в локальную сеть (к роутеру): иначе имена сайтов уйдут провайдеру.
-  {
+  if (!inbound) {
     FWPM_FILTER_CONDITION0 cond{};
     cond.fieldKey = FWPM_CONDITION_IP_REMOTE_PORT;
     cond.matchType = FWP_MATCH_EQUAL;
@@ -158,7 +185,7 @@ std::wstring AddLayer(const Context& c, bool v6, const std::vector<FWP_BYTE_BLOB
     }
   }
 
-  // Всё остальное — не выпускать.
+  // Всё остальное — не выпускать (и не принимать).
   if ((rc = AddFilter(c, layer, kWeightBlockAll, false, nullptr, 0)) != ERROR_SUCCESS) return Error(L"block", rc);
   return std::wstring();
 }
@@ -205,8 +232,10 @@ std::wstring KillSwitchEngage(const std::vector<std::wstring>& apps, const std::
         ids.push_back(id);
       }
     }
-    if (error.empty()) error = AddLayer(c, false, ids, tun_v4);
-    if (error.empty()) error = AddLayer(c, true, ids, tun_v6);
+    for (const bool inbound : {false, true}) {
+      if (error.empty()) error = AddLayer(c, false, inbound, ids, tun_v4);
+      if (error.empty()) error = AddLayer(c, true, inbound, ids, tun_v6);
+    }
     if (error.empty()) {
       rc = FwpmTransactionCommit0(engine);
       if (rc != ERROR_SUCCESS) error = Error(L"commit", rc);

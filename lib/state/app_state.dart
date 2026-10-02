@@ -445,20 +445,28 @@ class AppState extends ChangeNotifier {
     final viaProxy = isConnected && settings.updateViaProxy ? (_session ?? settings).httpPort : null;
     // Пока VPN подключён, «напрямую» — это через ядро мимо VPN-сервера (см. XrayConfig.addDirectInbound):
     // обычный запрос в режиме TUN ушёл бы в тот же туннель, а Kill Switch его не выпустил бы вовсе.
-    Future<FetchedSubscription> direct() =>
-        Net.fetchSubscription(sub.url, settings, proxyPort: isConnected ? _directPort : null).timeout(limit);
+    // Так идут только подписки по https: по http ссылка с ключом ушла бы открытым текстом через
+    // интернет-провайдера. Для них остаётся обычный запрос — в режиме TUN он идёт через туннель.
+    final past = isConnected && directSubscriptionHost(sub.url) != null ? _directPort : null;
+    Future<FetchedSubscription> direct() => Net.fetchSubscription(sub.url, settings, proxyPort: past).timeout(limit);
     // Сервер подписки уже не ответил через VPN, а напрямую ответил — не ждём таймаута ещё раз.
     if (viaProxy != null && !_subsDirectOnly.contains(sub.id)) {
       try {
         return await Net.fetchSubscription(sub.url, settings, proxyPort: viaProxy).timeout(limit);
       } catch (e) {
-        log.add('subscription', '${sub.displayName}: через VPN не удалось ($e), пробую напрямую');
+        log.add('subscription', '${sub.displayName}: через VPN не удалось (${scrubUrls('$e')}), пробую напрямую');
       }
       final fetched = await direct();
       _subsDirectOnly.add(sub.id);
       return fetched;
     }
     return direct();
+  }
+
+  /// Сервер подписки, к которому можно обращаться мимо VPN-сервера: только для ссылок по https.
+  static String? directSubscriptionHost(String url) {
+    final uri = Uri.tryParse(url);
+    return uri != null && uri.scheme == 'https' && uri.host.isNotEmpty ? uri.host : null;
   }
 
   /// Подписки, чей сервер не отвечает через VPN, но отвечает напрямую (до перезапуска программы).
@@ -518,7 +526,8 @@ class AppState extends ChangeNotifier {
       if (!silent) toast('Подписка «${sub.displayName}» обновлена — серверов: ${fresh.length}');
     } catch (e) {
       sub.error = describeNetError(e);
-      log.add('subscription', '${sub.displayName}: $e');
+      // Адрес подписки — ключ доступа: в журнал он не пишется, даже если попал в текст ошибки.
+      log.add('subscription', '${sub.displayName}: ${scrubUrls('$e')}');
       if (!silent) toast('Не удалось обновить «${sub.displayName}»: ${sub.error}');
     } finally {
       updatingSubs.remove(sub.id);
@@ -832,7 +841,7 @@ class AppState extends ChangeNotifier {
       }
       XrayConfig.addDirectInbound(config, port: directPort, settings: session, hosts: [
         for (final s in subscriptions)
-          if ((Uri.tryParse(s.url)?.host ?? '').isNotEmpty) Uri.parse(s.url).host,
+          if (directSubscriptionHost(s.url) != null) directSubscriptionHost(s.url)!,
       ]);
       _directPort = directPort;
       // С Kill Switch имя VPN-сервера ядро узнаёт само: запрос Windows к DNS обычной сети был бы

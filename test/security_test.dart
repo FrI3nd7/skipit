@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:skipit/core/link_parser.dart';
 import 'package:skipit/core/singbox_config.dart';
 import 'package:skipit/core/updates.dart';
+import 'package:skipit/core/util.dart';
 import 'package:skipit/core/windows.dart';
 import 'package:skipit/main.dart' show sanitizeArgs;
 import 'package:skipit/models/subscription.dart';
@@ -24,6 +25,26 @@ void main() {
     await state.resolvePendingLink(state.pendingLinks.first, accept: false);
     expect(state.pendingLinks, isEmpty);
     expect(state.subscriptions, isEmpty);
+  });
+
+  test('адрес подписки (ключ доступа) не попадает в журнал и в текст ошибки', () {
+    // Так сетевая ошибка Dart печатает адрес: целиком, вместе с путём-ключом.
+    final e = HttpException('Connection closed before full header was received',
+        uri: Uri.parse('https://panel.example/sub/SECRET-TOKEN?x=1'));
+    expect('$e', contains('SECRET-TOKEN'));
+    expect(scrubUrls('$e'), isNot(contains('SECRET-TOKEN')));
+    expect(scrubUrls('$e'), contains('https://panel.example/…'));
+    expect(describeNetError(e), isNot(contains('SECRET-TOKEN')));
+    // Имя и пароль в адресе тоже убираются; текст без адресов не меняется.
+    expect(scrubUrls('GET http://user:pass@host.example:8080/a/b failed'), 'GET http://host.example:8080/… failed');
+    expect(scrubUrls('Сервер ответил 404'), 'Сервер ответил 404');
+  });
+
+  test('мимо VPN-сервера обновляются только подписки по https', () {
+    expect(AppState.directSubscriptionHost('https://panel.example/sub/abc'), 'panel.example');
+    // По http ссылка с ключом ушла бы открытым текстом через интернет-провайдера.
+    expect(AppState.directSubscriptionHost('http://panel.example/sub/abc'), isNull);
+    expect(AppState.directSubscriptionHost('not a url'), isNull);
   });
 
   test('TUN перехватывает IPv6: при выключенном IPv6 он блокируется, а не идёт мимо VPN', () async {
