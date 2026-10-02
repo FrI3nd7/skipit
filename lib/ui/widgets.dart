@@ -307,10 +307,61 @@ class _RevealState extends State<Reveal> with SingleTickerProviderStateMixin {
   // проявлением сначала раскрывалась пустота, и это выглядело как задержка.
   late final _fade = CurvedAnimation(parent: _anim, curve: const Interval(0, 0.55, curve: Curves.easeOut));
 
+  final _childKey = GlobalKey();
+
+  /// Высота содержимого, измеренная при последнем раскрытии (если [Reveal.extent] не задан).
+  double? _measured;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.open) WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+  }
+
+  /// Чем выше блок, тем дольше он раскрывается: иначе длинный список «выстреливает» — за то же
+  /// время ему надо пройти в разы больший путь. Короткие блоки (до 200 точек) идут с обычной
+  /// скоростью, дальше время плавно растёт и перестаёт расти у блоков высотой с окно.
+  void _applyDuration(double? height) {
+    final extra = height == null ? 0.0 : ((height - 200) / 600).clamp(0.0, 1.0);
+    _anim.duration = Duration(milliseconds: 280 + (240 * extra).round());
+    _anim.reverseDuration = Duration(milliseconds: 220 + (180 * extra).round());
+  }
+
+  /// Высота ещё не известна: один кадр содержимое строится невидимым, чтобы её измерить.
+  bool _preparing = false;
+
+  /// Запоминает высоту содержимого (она известна только после того, как оно построено).
+  void _measure() {
+    if (!mounted) return;
+    final height = _childKey.currentContext?.size?.height;
+    if (height != null && height != _measured) setState(() => _measured = height);
+  }
+
   @override
   void didUpdateWidget(Reveal old) {
     super.didUpdateWidget(old);
-    if (old.open != widget.open) widget.open ? _anim.forward() : _anim.reverse();
+    if (old.open == widget.open) return;
+    final known = widget.extent ?? _measured;
+    if (!widget.open) {
+      _applyDuration(known);
+      _anim.reverse();
+    } else if (known != null) {
+      _applyDuration(known);
+      _anim.forward();
+      // Содержимое могло измениться с прошлого раза — запоминаем новую высоту.
+      WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+    } else {
+      _preparing = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _measure();
+        setState(() => _preparing = false);
+        if (widget.open) {
+          _applyDuration(_measured);
+          _anim.forward();
+        }
+      });
+    }
   }
 
   @override
@@ -323,13 +374,13 @@ class _RevealState extends State<Reveal> with SingleTickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-    final extent = widget.extent;
+    final extent = widget.extent ?? _measured;
     final screen = MediaQuery.sizeOf(context).height;
     // Доля высоты, которая раскрывается плавно (см. [Reveal.extent]).
     final animated = extent != null && extent > screen ? screen / extent : 1.0;
     return AnimatedBuilder(
       animation: _anim,
-      builder: (context, child) => _anim.isDismissed
+      builder: (context, child) => _anim.isDismissed && !_preparing
           ? const SizedBox(width: double.infinity)
           : ClipRect(
               child: Align(
@@ -338,7 +389,7 @@ class _RevealState extends State<Reveal> with SingleTickerProviderStateMixin {
                 child: Opacity(opacity: _fade.value, child: child),
               ),
             ),
-      child: widget.child,
+      child: KeyedSubtree(key: _childKey, child: widget.child),
     );
   }
 }
