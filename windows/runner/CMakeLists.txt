@@ -8,6 +8,7 @@ project(runner LANGUAGES CXX)
 # Any new source files that you add to the application should be added here.
 add_executable(${BINARY_NAME} WIN32
   "flutter_window.cpp"
+  "kill_switch.cpp"
   "main.cpp"
   "tray_menu.cpp"
   "utils.cpp"
@@ -35,6 +36,8 @@ target_compile_definitions(${BINARY_NAME} PRIVATE "NOMINMAX")
 # dependencies here.
 target_link_libraries(${BINARY_NAME} PRIVATE flutter flutter_wrapper_app)
 target_link_libraries(${BINARY_NAME} PRIVATE "dwmapi.lib" "shell32.lib" "gdiplus.lib")
+# «Рубильник» (kill_switch.cpp): фильтры Windows Filtering Platform.
+target_link_libraries(${BINARY_NAME} PRIVATE "fwpuclnt.lib" "rpcrt4.lib" "ws2_32.lib")
 target_include_directories(${BINARY_NAME} PRIVATE "${CMAKE_SOURCE_DIR}")
 
 # Run the Flutter tool portions of the build. This must not be removed.

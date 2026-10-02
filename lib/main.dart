@@ -10,6 +10,7 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'core/paths.dart';
 import 'core/tray.dart';
 import 'core/windows.dart';
+import 'models/server.dart';
 import 'models/settings.dart';
 import 'state/app_scope.dart';
 import 'state/app_state.dart';
@@ -128,11 +129,20 @@ Future<void> main(List<String> rawArgs) async {
       await state.shutdown();
       await Tray.quit();
     },
-    // Режим и сервер, выбранные в меню значка. Если VPN подключён, он переподключится сам.
+    // Режим, ядро TUN и сервер, выбранные в меню значка. Если VPN подключён, он переподключится сам.
     onMode: (index) async {
       if (index < 0 || index >= trayModes.length) return;
       try {
         await state.setMode(trayModes[index]);
+      } on NeedAdminException catch (e) {
+        await Tray.show();
+        state.toast('$e — нажмите кнопку подключения в окне');
+      }
+    },
+    onCore: (index) async {
+      if (index < 0 || index >= TunCore.values.length) return;
+      try {
+        await state.setTunCore(TunCore.values[index]);
       } on NeedAdminException catch (e) {
         await Tray.show();
         state.toast('$e — нажмите кнопку подключения в окне');
@@ -159,7 +169,7 @@ Future<void> main(List<String> rawArgs) async {
       ConnStatus.connected => 'Подключено',
       ConnStatus.connecting => 'Подключение…',
       ConnStatus.disconnecting => 'Отключение…',
-      ConnStatus.disconnected => 'Не подключено',
+      ConnStatus.disconnected => state.killSwitchHolding ? 'Интернет закрыт «рубильником»' : 'Не подключено',
     };
     final tooltip = '${AppPaths.appName} — $status${server != null ? '\n$server' : ''}';
     // Тема берётся из настроек, а не из уже применённой палитры: этот обработчик срабатывает раньше,
@@ -171,7 +181,16 @@ Future<void> main(List<String> rawArgs) async {
     };
     // Серверы для меню — в том же порядке, что на главной (не больше 60: меню прокручивается колесом).
     final servers = state.servers.take(60).toList();
+    // Провайдер каждого сервера — для заголовков в списке. Если провайдер один, заголовки не нужны.
+    String groupOf(ServerProfile s) {
+      final sub = state.subscriptionById(s.subscriptionId);
+      return sub == null ? 'Свои серверы' : Flags.toPlain(sub.displayName);
+    }
+
+    final groups = [for (final s in servers) groupOf(s)];
+    final grouped = groups.toSet().length > 1;
     final key = '$tooltip|${state.status.name}|${state.settings.closeToTray}|$dark|${state.settings.mode.name}|'
+        '${state.usesTun ? state.settings.tunCore.name : ''}|${grouped ? groups.join(',') : ''}|'
         '${state.settings.selectedServerId}|${servers.map((s) => '${s.id}:${s.name}').join(',')}';
     if (key == lastTray) return;
     lastTray = key;
@@ -186,12 +205,19 @@ Future<void> main(List<String> rawArgs) async {
       dark: dark,
       modes: [for (final m in trayModes) m == ConnectionMode.proxyOnly ? 'Порты' : m.label],
       mode: trayModes.indexOf(state.settings.mode),
+      // Ядро TUN выбирается только в режимах с адаптером — в остальных переключателя в меню нет.
+      cores: state.usesTun ? const ['sing-box', 'Xray'] : const [],
+      core: TunCore.values.indexOf(state.settings.tunCore),
       servers: [
-        for (final s in servers)
+        for (final (i, s) in servers.indexed)
           () {
             final (country, rest) = Flags.leading(s.name);
             final flag = country == null ? '' : '$flagsDir\\$country.png';
-            return {'name': Flags.toPlain(rest), 'flag': flag.isNotEmpty && File(flag).existsSync() ? flag : ''};
+            return {
+              'name': Flags.toPlain(rest),
+              'flag': flag.isNotEmpty && File(flag).existsSync() ? flag : '',
+              'group': grouped ? groups[i] : '',
+            };
           }(),
       ],
       selectedServer: servers.indexWhere((s) => s.id == state.settings.selectedServerId),

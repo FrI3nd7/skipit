@@ -55,6 +55,9 @@ class AppSettings {
   int mtu = 9000;
   bool autoSelect = false;
   bool autoReconnect = true;
+
+  /// «Рубильник»: в режимах с TUN не выпускать трафик мимо VPN, даже если ядро упало.
+  bool killSwitch = false;
   bool connectOnStart = false;
 
   /// При запуске просить права администратора (нужны для TUN и «Смешанного» режима).
@@ -98,6 +101,7 @@ class AppSettings {
         'mtu': mtu,
         'autoSelect': autoSelect,
         'autoReconnect': autoReconnect,
+        'killSwitch': killSwitch,
         'connectOnStart': connectOnStart,
         'runAsAdmin': runAsAdmin,
         'testUrl': testUrl,
@@ -136,6 +140,7 @@ class AppSettings {
     s.mtu = asInt(j['mtu']) ?? s.mtu;
     s.autoSelect = parseBool(j['autoSelect'], s.autoSelect);
     s.autoReconnect = parseBool(j['autoReconnect'], s.autoReconnect);
+    s.killSwitch = parseBool(j['killSwitch'], s.killSwitch);
     s.connectOnStart = parseBool(j['connectOnStart'], s.connectOnStart);
     s.runAsAdmin = parseBool(j['runAsAdmin'], s.runAsAdmin);
     s.testUrl = j['testUrl'] as String? ?? s.testUrl;

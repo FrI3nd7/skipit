@@ -8,11 +8,13 @@ class Tray {
   static const _channel = MethodChannel('skipit/tray');
 
   /// [onToggle] — пункт «Подключить/Отключить», [onExit] — «Выход».
-  /// [onMode] и [onServer] — выбор режима и сервера в меню значка (приходит номер пункта).
+  /// [onMode], [onCore] и [onServer] — выбор режима, ядра TUN и сервера в меню значка
+  /// (приходит номер пункта).
   static void init({
     required Future<void> Function() onToggle,
     required Future<void> Function() onExit,
     required Future<void> Function(int index) onMode,
+    required Future<void> Function(int index) onCore,
     required Future<void> Function(int index) onServer,
   }) {
     _channel.setMethodCallHandler((call) async {
@@ -23,6 +25,8 @@ class Tray {
           await onExit();
         case 'mode':
           await onMode(call.arguments as int);
+        case 'core':
+          await onCore(call.arguments as int);
         case 'server':
           await onServer(call.arguments as int);
       }
@@ -40,6 +44,7 @@ class Tray {
 
   /// [status] и [server] — шапка меню значка, [state]: 0 — не подключено, 1 — идёт подключение
   /// или отключение, 2 — подключено; [dark] — тема программы (меню рисуется в её цветах).
+  /// [cores] — ядра TUN; пустой список прячет их переключатель (режим без адаптера).
   static Future<void> update({
     required String tooltip,
     required bool connected,
@@ -50,14 +55,19 @@ class Tray {
     required bool dark,
     required List<String> modes,
     required int mode,
+    required List<String> cores,
+    required int core,
     required List<Map<String, String>> servers,
     required int selectedServer,
   }) =>
       _call('update', {
         'modeLabel': 'РЕЖИМ',
         'serversLabel': 'СЕРВЕР',
+        'coreLabel': 'ЯДРО TUN',
         'modes': modes,
         'mode': mode,
+        'cores': cores,
+        'core': core,
         'servers': servers,
         'selectedServer': selectedServer,
         'title': AppPaths.appName,

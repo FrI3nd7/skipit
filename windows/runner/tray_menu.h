@@ -6,10 +6,13 @@
 #include <string>
 #include <vector>
 
-// Сервер в меню значка: название и картинка флага (путь к PNG; пусто — флага нет).
+// Сервер в меню значка: название, картинка флага (путь к PNG; пусто — флага нет) и провайдер.
+// Когда у соседних серверов провайдер разный, перед сервером рисуется строка с его названием
+// (пусто — без заголовков: провайдер один).
 struct TrayMenuServer {
   std::wstring name;
   std::wstring flag;
+  std::wstring group;
 };
 
 // Что показать в меню значка в трее. Подписи и состояние приходят из Dart (lib/core/tray.dart).
@@ -24,6 +27,7 @@ struct TrayMenuModel {
   std::wstring label_exit = L"Exit";
   std::wstring label_mode = L"Mode";
   std::wstring label_servers = L"Server";
+  std::wstring label_core = L"TUN core";
   // 0 — не подключено, 1 — идёт подключение или отключение, 2 — подключено.
   int state = 0;
   // Тёмная или светлая тема программы.
@@ -31,17 +35,21 @@ struct TrayMenuModel {
   // Режимы подключения (подписи) и номер выбранного.
   std::vector<std::wstring> modes;
   int mode = -1;
+  // Ядра TUN (подписи) и номер выбранного; пусто — режим без TUN, переключатель не показывается.
+  std::vector<std::wstring> cores;
+  int core = -1;
   // Серверы и номер выбранного.
   std::vector<TrayMenuServer> servers;
   int selected_server = -1;
 };
 
-// Команды, которые меню отправляет владельцу. Режим и сервер — это база плюс номер пункта.
+// Команды, которые меню отправляет владельцу. Режим, ядро TUN и сервер — это база плюс номер пункта.
 struct TrayMenuCommands {
   UINT toggle;
   UINT open;
   UINT exit;
   UINT mode_base;
+  UINT core_base;
   UINT server_base;
 };
 

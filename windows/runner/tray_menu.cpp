@@ -32,8 +32,8 @@ constexpr int kItemHeight = 36;
 constexpr int kRowHeight = 34;
 constexpr int kLabelHeight = 22;
 constexpr int kSeparatorHeight = 9;
-// Больше серверов разом не показываем — остальные прокручиваются колесом мыши.
-constexpr int kMaxVisibleServers = 6;
+// Больше строк в списке серверов разом не показываем — остальные прокручиваются колесом мыши.
+constexpr int kMaxVisibleServers = 7;
 
 // Значки из системного шрифта Segoe Fluent Icons / Segoe MDL2 Assets (коды у них общие).
 constexpr wchar_t kGlyphPlay = L'\xE768';
@@ -43,7 +43,7 @@ constexpr wchar_t kGlyphPower = L'\xE7E8';
 constexpr wchar_t kGlyphGlobe = L'\xE774';
 constexpr wchar_t kGlyphCheck = L'\xE73E';
 
-enum class Kind { kAction, kMode, kServer };
+enum class Kind { kAction, kMode, kCore, kServer };
 
 struct Item {
   Kind kind = Kind::kAction;
@@ -53,10 +53,11 @@ struct Item {
   // Главное действие (подключить) — оранжевым, опасное (выход) — красным при наведении.
   bool accent = false;
   bool danger = false;
-  // Выбранный режим или сервер.
+  // Выбранный режим, ядро TUN или сервер.
   bool selected = false;
-  // Номер сервера в модели (для флага).
+  // Номер сервера в модели (для флага) и его строка в списке серверов.
   int server = -1;
+  int row = -1;
   // Пустой прямоугольник — пункт сейчас не виден (сервер за пределами прокрутки).
   RECT rect{};
 };
@@ -74,10 +75,13 @@ struct Menu {
   std::vector<Label> labels;
   // Вертикальные позиции линий-разделителей.
   std::vector<int> separators;
-  // Подложка переключателя режимов и область списка серверов.
+  // Подложки переключателей режима и ядра TUN, область списка серверов.
   RECT mode_track{};
+  RECT core_track{};
   RECT server_area{};
-  // С какого сервера начинается видимая часть списка.
+  // Строки списка серверов: номер сервера или, для заголовка провайдера, −1 − номер сервера под ним.
+  std::vector<int> rows;
+  // С какой строки начинается видимая часть списка.
   int server_offset = 0;
   int hover = -1;
   bool tracking = false;
@@ -132,7 +136,7 @@ void FillRounded(Gdiplus::Graphics& g, const Gdiplus::RectF& r, float radius, Gd
 }
 
 int VisibleServers(const Menu& m) {
-  return std::min(static_cast<int>(m.model.servers.size()), kMaxVisibleServers);
+  return std::min(static_cast<int>(m.rows.size()), kMaxVisibleServers);
 }
 
 // Раскладывает пункты и возвращает высоту меню в пикселях экрана.
@@ -142,6 +146,7 @@ int Layout(Menu& m) {
   m.labels.clear();
   m.separators.clear();
   SetRectEmpty(&m.mode_track);
+  SetRectEmpty(&m.core_track);
   SetRectEmpty(&m.server_area);
 
   int y = px(kPadding) + px(kHeaderHeight);
@@ -163,27 +168,31 @@ int Layout(Menu& m) {
     }
   }
 
-  // Режим: один ряд, ширина сегмента — по длине подписи.
-  int total = 0;
-  for (const Item& item : m.items) {
-    if (item.kind == Kind::kMode) total += static_cast<int>(item.text.size()) + 3;
-  }
-  if (total > 0) {
+  // Переключатель в один ряд (режим, ядро TUN): ширина сегмента — по длине подписи.
+  const auto segmented = [&](Kind kind, const std::wstring& title, RECT& track) {
+    int total = 0;
+    for (const Item& item : m.items) {
+      if (item.kind == kind) total += static_cast<int>(item.text.size()) + 3;
+    }
+    if (total == 0) return;
     separator();
-    label(m.model.label_mode);
-    m.mode_track = RECT{left + px(4), y, right - px(4), y + px(kRowHeight)};
-    const int inner_left = m.mode_track.left + px(3);
-    const int inner_width = (m.mode_track.right - px(3)) - inner_left;
+    label(title);
+    track = RECT{left + px(4), y, right - px(4), y + px(kRowHeight)};
+    const int inner_left = track.left + px(3);
+    const int inner_width = (track.right - px(3)) - inner_left;
     int used = 0;
     for (Item& item : m.items) {
-      if (item.kind != Kind::kMode) continue;
+      if (item.kind != kind) continue;
       const int x0 = inner_left + inner_width * used / total;
       used += static_cast<int>(item.text.size()) + 3;
       const int x1 = inner_left + inner_width * used / total;
       item.rect = RECT{x0, y + px(3), x1, y + px(kRowHeight - 3)};
     }
     y += px(kRowHeight);
-  }
+  };
+  segmented(Kind::kMode, m.model.label_mode, m.mode_track);
+  // Ядро TUN — только в режимах с адаптером (в остальных список ядер пуст).
+  segmented(Kind::kCore, m.model.label_core, m.core_track);
 
   // Серверы: видимая часть списка, остальное — прокруткой.
   const int visible = VisibleServers(m);
@@ -193,12 +202,20 @@ int Layout(Menu& m) {
     m.server_area = RECT{left, y, right, y + px(kRowHeight) * visible};
     for (Item& item : m.items) {
       if (item.kind != Kind::kServer) continue;
-      const int row = item.server - m.server_offset;
+      const int row = item.row - m.server_offset;
       if (row < 0 || row >= visible) {
         SetRectEmpty(&item.rect);
       } else {
         item.rect = RECT{left, y + px(kRowHeight) * row, right, y + px(kRowHeight) * (row + 1)};
       }
+    }
+    // Заголовки провайдеров — подписями, как названия разделов.
+    for (int row = 0; row < visible; row++) {
+      const int value = m.rows[row + m.server_offset];
+      if (value >= 0) continue;
+      const int top = y + px(kRowHeight) * row;
+      m.labels.push_back(Label{m.model.servers[-1 - value].group,
+                               RECT{left + px(10), top + px(8), right - px(10), top + px(kRowHeight)}});
     }
     y += px(kRowHeight) * visible;
   }
@@ -299,8 +316,9 @@ void Paint(HWND hwnd, HDC target) {
       g.DrawString(label.text.c_str(), -1, &label_font, ToRectF(label.rect), &format, &muted_brush);
     }
 
-    // Подложка переключателя режимов.
+    // Подложки переключателей режима и ядра TUN.
     if (!IsRectEmpty(&m->mode_track)) FillRounded(g, ToRectF(m->mode_track), 10 * s, Rgb(p.track));
+    if (!IsRectEmpty(&m->core_track)) FillRounded(g, ToRectF(m->core_track), 10 * s, Rgb(p.track));
 
     for (size_t i = 0; i < m->items.size(); i++) {
       const Item& item = m->items[i];
@@ -308,8 +326,8 @@ void Paint(HWND hwnd, HDC target) {
       const Gdiplus::RectF r = ToRectF(item.rect);
       const bool hovered = static_cast<int>(i) == m->hover;
 
-      if (item.kind == Kind::kMode) {
-        // Выбранный режим — оранжевая плашка с градиентом, как переключатель в окне программы.
+      if (item.kind == Kind::kMode || item.kind == Kind::kCore) {
+        // Выбранный режим (ядро) — оранжевая плашка с градиентом, как переключатель в окне программы.
         if (item.selected) {
           Gdiplus::GraphicsPath path;
           AddRounded(path, r, 8 * s);
@@ -370,8 +388,8 @@ void Paint(HWND hwnd, HDC target) {
                    Gdiplus::RectF(r.X + 40 * s, r.Y, r.Width - 48 * s, r.Height), &format, &label_brush);
     }
 
-    // Полоска прокрутки списка серверов — только когда не все серверы помещаются.
-    const int count = static_cast<int>(m->model.servers.size());
+    // Полоска прокрутки списка серверов — только когда не все строки помещаются.
+    const int count = static_cast<int>(m->rows.size());
     const int visible = VisibleServers(*m);
     if (count > visible && visible > 0) {
       const float area_top = static_cast<float>(m->server_area.top);
@@ -450,7 +468,7 @@ LRESULT CALLBACK MenuProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam)
     case WM_MOUSEWHEEL:
       // Колесо прокручивает список серверов, если они не помещаются.
       if (m) {
-        const int count = static_cast<int>(m->model.servers.size());
+        const int count = static_cast<int>(m->rows.size());
         const int max_offset = count - VisibleServers(*m);
         if (max_offset > 0) {
           const int step = GET_WHEEL_DELTA_WPARAM(wparam) > 0 ? -1 : 1;
@@ -543,13 +561,30 @@ void ShowTrayMenu(HWND owner, UINT message, POINT pt, const TrayMenuModel& model
     mode.selected = static_cast<int>(i) == model.mode;
     menu->items.push_back(mode);
   }
+  for (size_t i = 0; i < model.cores.size(); i++) {
+    Item core;
+    core.kind = Kind::kCore;
+    core.command = commands.core_base + static_cast<UINT>(i);
+    core.text = model.cores[i];
+    core.selected = static_cast<int>(i) == model.core;
+    menu->items.push_back(core);
+  }
+  int selected_row = -1;
   for (size_t i = 0; i < model.servers.size(); i++) {
+    // Провайдер сменился — перед сервером идёт строка с названием провайдера.
+    const std::wstring& group = model.servers[i].group;
+    if (!group.empty() && (i == 0 || model.servers[i - 1].group != group)) {
+      menu->rows.push_back(-1 - static_cast<int>(i));
+    }
     Item server;
     server.kind = Kind::kServer;
     server.command = commands.server_base + static_cast<UINT>(i);
     server.text = model.servers[i].name;
     server.server = static_cast<int>(i);
+    server.row = static_cast<int>(menu->rows.size());
     server.selected = static_cast<int>(i) == model.selected_server;
+    if (server.selected) selected_row = server.row;
+    menu->rows.push_back(static_cast<int>(i));
     menu->items.push_back(server);
   }
   Item show;
@@ -565,10 +600,10 @@ void ShowTrayMenu(HWND owner, UINT message, POINT pt, const TrayMenuModel& model
   menu->items.push_back(quit);
 
   // Список открывается так, чтобы выбранный сервер был виден.
-  const int count = static_cast<int>(model.servers.size());
+  const int count = static_cast<int>(menu->rows.size());
   const int visible = VisibleServers(*menu);
-  if (count > visible && model.selected_server >= 0) {
-    menu->server_offset = std::max(0, std::min(count - visible, model.selected_server - visible / 2));
+  if (count > visible && selected_row >= 0) {
+    menu->server_offset = std::max(0, std::min(count - visible, selected_row - visible / 2));
   }
 
   // Масштаб того монитора, на котором открыто меню.

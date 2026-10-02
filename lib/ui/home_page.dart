@@ -133,6 +133,14 @@ class _HomePageState extends State<HomePage> {
       ),
       const SizedBox(height: 10),
       SizedBox(width: 360, child: _RoutingInfo(summary: state.routingSummary, onTap: () => state.openPage(AppState.routingPage))),
+      // «Рубильник» держит интернет закрытым без VPN — это видно, пока его не снимут или VPN не вернётся.
+      if (state.killSwitchHolding) ...[
+        const SizedBox(height: 14),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 360),
+          child: _KillSwitchBox(onRelease: state.releaseKillSwitch),
+        ),
+      ],
       if (state.lastError != null) ...[
         const SizedBox(height: 14),
         ConstrainedBox(
@@ -300,6 +308,39 @@ class _RoutingInfoState extends State<_RoutingInfo> {
             ),
           ),
         ),
+      );
+}
+
+/// Интернет закрыт «рубильником»: объяснение и кнопка, которая открывает его без VPN.
+class _KillSwitchBox extends StatelessWidget {
+  const _KillSwitchBox({required this.onRelease});
+  final VoidCallback onRelease;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: C.orange.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: C.orange.withValues(alpha: 0.45)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            const Icon(Icons.shield_rounded, size: 18, color: C.orange),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text('Интернет закрыт «рубильником»',
+                  style: TextStyle(color: C.text, fontSize: 13, fontWeight: FontWeight.w700)),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Text('VPN не подключён, поэтому программы не выпускаются в сеть напрямую. '
+              'Подключитесь снова или откройте интернет без VPN.',
+              style: TextStyle(color: C.muted, fontSize: 12.5)),
+          const SizedBox(height: 10),
+          GhostButton(label: 'Открыть интернет без VPN', icon: Icons.lock_open_rounded, onPressed: onRelease),
+        ]),
       );
 }
 

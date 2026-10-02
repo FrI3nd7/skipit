@@ -5,6 +5,7 @@
 #include <optional>
 
 #include "flutter/generated_plugin_registrant.h"
+#include "kill_switch.h"
 #include "resource.h"
 #include "utils.h"
 
@@ -20,6 +21,7 @@ constexpr UINT kCmdToggle = 2;
 constexpr UINT kCmdExit = 3;
 // Выбор режима и сервера в меню значка: база плюс номер пункта.
 constexpr UINT kCmdModeBase = 100;
+constexpr UINT kCmdCoreBase = 200;
 constexpr UINT kCmdServerBase = 1000;
 constexpr wchar_t kRegPlacement[] = L"WindowPlacement";
 
@@ -74,6 +76,15 @@ bool FlutterWindow::OnCreate() {
       });
   AddTrayIcon();
 
+  kill_switch_channel_ = std::make_unique<flutter::MethodChannel<flutter::EncodableValue>>(
+      flutter_controller_->engine()->messenger(), "skipit/killswitch",
+      &flutter::StandardMethodCodec::GetInstance());
+  kill_switch_channel_->SetMethodCallHandler(
+      [this](const flutter::MethodCall<flutter::EncodableValue>& call,
+             std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+        HandleKillSwitchCall(call, std::move(result));
+      });
+
   // При автозапуске с Windows окно не показываем — программа сразу живёт в трее.
   const bool start_hidden = wcsstr(GetCommandLineW(), L"--autostart") != nullptr;
   flutter_controller_->engine()->SetNextFrameCallback([this, start_hidden]() {
@@ -96,6 +107,8 @@ bool FlutterWindow::OnCreate() {
 void FlutterWindow::OnDestroy() {
   RemoveTrayIcon();
   tray_channel_ = nullptr;
+  kill_switch_channel_ = nullptr;
+  KillSwitchRelease();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -171,8 +184,52 @@ void FlutterWindow::ShowTrayMenu() {
   GetCursorPos(&pt);
   if (tray_menu_.status.empty()) tray_menu_.title = IsDevBuild() ? L"SkipIt Dev" : L"SkipIt";
   ::ShowTrayMenu(GetHandle(), kTrayMenuCommand, pt, tray_menu_,
-                 TrayMenuCommands{kCmdToggle, kCmdOpen, kCmdExit, kCmdModeBase, kCmdServerBase});
+                 TrayMenuCommands{kCmdToggle, kCmdOpen, kCmdExit, kCmdModeBase, kCmdCoreBase, kCmdServerBase});
 }
+
+void FlutterWindow::HandleKillSwitchCall(
+    const flutter::MethodCall<flutter::EncodableValue>& call,
+    std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
+  const std::string& method = call.method_name();
+  if (method == "engage") {
+    std::vector<std::wstring> apps;
+    std::wstring v4, v6;
+    if (const auto* args = std::get_if<flutter::EncodableMap>(call.arguments())) {
+      auto text = [args](const char* key) {
+        auto it = args->find(flutter::EncodableValue(key));
+        const auto* s = it == args->end() ? nullptr : std::get_if<std::string>(&it->second);
+        return s ? Utf8ToWide(*s) : std::wstring();
+      };
+      v4 = text("v4");
+      v6 = text("v6");
+      auto it = args->find(flutter::EncodableValue("apps"));
+      if (it != args->end()) {
+        if (const auto* list = std::get_if<flutter::EncodableList>(&it->second)) {
+          for (const auto& value : *list) {
+            if (const auto* s = std::get_if<std::string>(&value)) apps.push_back(Utf8ToWide(*s));
+          }
+        }
+      }
+    }
+    const std::wstring error = KillSwitchEngage(apps, v4, v6);
+    if (error.empty()) {
+      result->Success();
+    } else {
+      const int n = WideCharToMultiByte(CP_UTF8, 0, error.data(), static_cast<int>(error.size()), nullptr, 0,
+                                        nullptr, nullptr);
+      std::string message(n, '\0');
+      WideCharToMultiByte(CP_UTF8, 0, error.data(), static_cast<int>(error.size()), message.data(), n, nullptr,
+                          nullptr);
+      result->Error("wfp", message);
+    }
+  } else if (method == "release") {
+    KillSwitchRelease();
+    result->Success();
+  } else {
+    result->NotImplemented();
+  }
+}
+
 void FlutterWindow::HandleTrayCall(
     const flutter::MethodCall<flutter::EncodableValue>& call,
     std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result) {
@@ -209,6 +266,7 @@ void FlutterWindow::HandleTrayCall(
       }
       if (auto v = text("modeLabel")) tray_menu_.label_mode = *v;
       if (auto v = text("serversLabel")) tray_menu_.label_servers = *v;
+      if (auto v = text("coreLabel")) tray_menu_.label_core = *v;
       auto number = [args](const char* key, int fallback) {
         auto it = args->find(flutter::EncodableValue(key));
         if (it == args->end()) return fallback;
@@ -217,15 +275,19 @@ void FlutterWindow::HandleTrayCall(
       };
       tray_menu_.mode = number("mode", tray_menu_.mode);
       tray_menu_.selected_server = number("selectedServer", tray_menu_.selected_server);
-      auto modes = args->find(flutter::EncodableValue("modes"));
-      if (modes != args->end()) {
-        if (const auto* list = std::get_if<flutter::EncodableList>(&modes->second)) {
-          tray_menu_.modes.clear();
+      tray_menu_.core = number("core", tray_menu_.core);
+      auto strings = [args](const char* key, std::vector<std::wstring>& out) {
+        auto it = args->find(flutter::EncodableValue(key));
+        if (it == args->end()) return;
+        if (const auto* list = std::get_if<flutter::EncodableList>(&it->second)) {
+          out.clear();
           for (const auto& value : *list) {
-            if (const auto* s = std::get_if<std::string>(&value)) tray_menu_.modes.push_back(Utf8ToWide(*s));
+            if (const auto* s = std::get_if<std::string>(&value)) out.push_back(Utf8ToWide(*s));
           }
         }
-      }
+      };
+      strings("modes", tray_menu_.modes);
+      strings("cores", tray_menu_.cores);
       auto servers = args->find(flutter::EncodableValue("servers"));
       if (servers != args->end()) {
         if (const auto* list = std::get_if<flutter::EncodableList>(&servers->second)) {
@@ -238,7 +300,7 @@ void FlutterWindow::HandleTrayCall(
               const auto* s = it == entry->end() ? nullptr : std::get_if<std::string>(&it->second);
               return s ? Utf8ToWide(*s) : std::wstring();
             };
-            tray_menu_.servers.push_back(TrayMenuServer{field("name"), field("flag")});
+            tray_menu_.servers.push_back(TrayMenuServer{field("name"), field("flag"), field("group")});
           }
         }
       }
@@ -320,11 +382,14 @@ FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
           if (tray_channel_) tray_channel_->InvokeMethod("exit", nullptr);
           break;
         default:
-          // Выбран режим или сервер — номер пункта уходит в Dart.
+          // Выбран режим, ядро TUN или сервер — номер пункта уходит в Dart.
           if (!tray_channel_) break;
           if (wparam >= kCmdServerBase) {
             tray_channel_->InvokeMethod(
                 "server", std::make_unique<flutter::EncodableValue>(static_cast<int32_t>(wparam - kCmdServerBase)));
+          } else if (wparam >= kCmdCoreBase) {
+            tray_channel_->InvokeMethod(
+                "core", std::make_unique<flutter::EncodableValue>(static_cast<int32_t>(wparam - kCmdCoreBase)));
           } else if (wparam >= kCmdModeBase) {
             tray_channel_->InvokeMethod(
                 "mode", std::make_unique<flutter::EncodableValue>(static_cast<int32_t>(wparam - kCmdModeBase)));

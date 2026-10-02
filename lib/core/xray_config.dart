@@ -286,7 +286,11 @@ class XrayConfig {
   }
 
   static const tunTag = 'skipit-tun';
-  static const _tunGateway = ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'];
+
+  /// Адреса TUN-адаптера (одни и те же с обоими ядрами). По ним же «рубильник» узнаёт соединения,
+  /// идущие через адаптер.
+  static const tunV4 = '172.19.0.1', tunV6 = 'fdfe:dcba:9876::1';
+  static const _tunGateway = ['$tunV4/30', '$tunV6/126'];
 
   /// DNS адаптера — сосед шлюза в подсети TUN: запросы к нему попадают в адаптер, там их
   /// перехватывает правило, и отвечает встроенный DNS Xray.

@@ -4,6 +4,7 @@ import '../models/app_rules.dart';
 import '../models/routing.dart';
 import '../models/settings.dart';
 import 'paths.dart';
+import 'xray_config.dart';
 
 /// sing-box поднимает TUN-адаптер и отправляет весь трафик в SOCKS-порт Xray.
 /// Сам Xray (и sing-box) идут напрямую — иначе получится петля.
@@ -108,7 +109,7 @@ class SingboxConfig {
           'interface_name': AppPaths.appName,
           // IPv6-адрес у адаптера есть всегда: иначе IPv6-трафик шёл бы мимо туннеля (утечка IP),
           // если у интернет-провайдера пользователя есть IPv6. При выключенном IPv6 он блокируется правилом ниже.
-          'address': ['172.19.0.1/30', 'fdfe:dcba:9876::1/126'],
+          'address': ['${XrayConfig.tunV4}/30', '${XrayConfig.tunV6}/126'],
           'mtu': settings.mtu,
           'auto_route': true,
           'strict_route': true,
