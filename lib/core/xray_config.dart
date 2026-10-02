@@ -541,6 +541,59 @@ class XrayConfig {
     cfg['routing'] = routing;
   }
 
+  /// Адреса VPN-серверов ядро узнаёт само — своим DNS и напрямую, а не через Windows.
+  /// Нужно при включённом Kill Switch: пока адаптер ещё не поднят, Windows может спросить имя сервера
+  /// только у DNS обычной сети, а этот запрос Kill Switch не выпускает. Ядро ждало бы ответа секунд
+  /// двенадцать (столько Windows перебирает попытки), и всё это время VPN «подключён», но не работает.
+  /// Запрос самого ядра к [_bootstrapDns] разрешён: ядру можно выходить в сеть мимо адаптера.
+  static void resolveServersInside(Map<String, dynamic> cfg, {required AppSettings settings}) {
+    const direct = 'skipit-direct';
+    final strategy = settings.ipv6 ? 'UseIP' : 'UseIPv4';
+    final outbounds = [...(cfg['outbounds'] as List)];
+    final domains = <String>{};
+    for (final o in outbounds) {
+      if (o is! Map || const ['freedom', 'blackhole', 'dns'].contains(o['protocol'])) continue;
+      final own = <String>{};
+      _collectAddresses(o, own);
+      if (own.isEmpty) continue;
+      domains.addAll(own);
+      // С этой настройкой адрес сервера в исходящем соединении ищет встроенный DNS Xray.
+      final stream = (o['streamSettings'] ??= <String, dynamic>{}) as Map;
+      final sockopt = (stream['sockopt'] ??= <String, dynamic>{}) as Map;
+      sockopt['domainStrategy'] ??= strategy;
+    }
+    if (domains.isEmpty) return;
+
+    if (!outbounds.any((o) => o is Map && o['tag'] == direct)) {
+      outbounds.add({
+        'tag': direct,
+        'protocol': 'freedom',
+        'streamSettings': {
+          'sockopt': {'domainStrategy': strategy},
+        },
+      });
+    }
+    cfg['outbounds'] = outbounds;
+
+    final dns = (cfg['dns'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final servers = [...(dns['servers'] as List? ?? const [])];
+    if (servers.isEmpty) servers.add('1.1.1.1');
+    final wanted = [for (final d in domains) 'full:$d'];
+    // В режиме «TUN на ядре Xray» такая запись уже добавлена в [addTun].
+    final known = servers.any((s) =>
+        s is Map && s['address'] == _bootstrapDns && wanted.every((s['domains'] as List? ?? const []).contains));
+    if (!known) servers.add({'address': _bootstrapDns, 'domains': wanted, 'skipFallback': true});
+    dns['servers'] = servers;
+    cfg['dns'] = dns;
+
+    final routing = (cfg['routing'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    routing['rules'] = [
+      {'ip': [_bootstrapDns], 'port': '53', 'outboundTag': direct},
+      ...(routing['rules'] as List? ?? const []),
+    ];
+    cfg['routing'] = routing;
+  }
+
   /// Конфиг для проверки задержки: на каждый сервер свой HTTP-inbound на своём порту.
   static Map<String, dynamic> buildTest(List<ServerProfile> servers, int basePort) {
     final inbounds = <Map<String, dynamic>>[];

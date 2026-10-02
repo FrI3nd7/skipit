@@ -835,6 +835,9 @@ class AppState extends ChangeNotifier {
           if ((Uri.tryParse(s.url)?.host ?? '').isNotEmpty) Uri.parse(s.url).host,
       ]);
       _directPort = directPort;
+      // С Kill Switch имя VPN-сервера ядро узнаёт само: запрос Windows к DNS обычной сети был бы
+      // заблокирован, и подключение «висело» бы секунд двенадцать.
+      if (usesTun && settings.killSwitch) XrayConfig.resolveServersInside(config, settings: session);
       _routes
         ..clear()
         ..addEntries([

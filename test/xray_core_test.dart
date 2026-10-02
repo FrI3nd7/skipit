@@ -119,6 +119,18 @@ void main() {
         expect(all[2], {'inboundTag': directIn, 'outboundTag': 'skipit-block'});
         expect((config['outbounds'] as List).where((o) => o['tag'] == 'skipit-direct').length, 1);
 
+        // Kill Switch: адрес VPN-сервера ядро узнаёт своим DNS (запрос Windows был бы заблокирован).
+        XrayConfig.resolveServersInside(config, settings: AppSettings());
+        final proxy = (config['outbounds'] as List).first as Map;
+        expect(((proxy['streamSettings'] as Map)['sockopt'] as Map)['domainStrategy'], 'UseIPv4');
+        expect((config['outbounds'] as List).where((o) => o['tag'] == 'skipit-direct').length, 1);
+        // Запись для адреса сервера в DNS одна: в режиме TUN на Xray её уже добавил addTun.
+        final bootstrap = ((config['dns'] as Map)['servers'] as List)
+            .where((s) => s is Map && jsonEncode(s['domains'] ?? '').contains('full:example.com'));
+        expect(bootstrap.length, 1);
+        expect(((config['routing'] as Map)['rules'] as List).first,
+            {'ip': ['77.88.8.8'], 'port': '53', 'outboundTag': 'skipit-direct'});
+
         final dir = await Directory.systemTemp.createTemp('skipit-xray-test');
         try {
           final file = File('${dir.path}\\config.json');
