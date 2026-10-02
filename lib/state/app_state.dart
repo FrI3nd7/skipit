@@ -961,6 +961,7 @@ class AppState extends ChangeNotifier {
     await _teardown();
     if (!hold) await KillSwitch.release();
     log.add('app', 'Отключено');
+    if (KillSwitch.active) log.add('app', '«Рубильник» держит интернет закрытым');
     log.endSession();
     if (!keepError) lastError = null;
     status = ConnStatus.disconnected;
@@ -999,7 +1000,6 @@ class AppState extends ChangeNotifier {
     unawaited(() async {
       // Включённый «рубильник» остаётся стоять: пока VPN не вернулся, трафик напрямую не идёт.
       await disconnect(keepError: true, hold: true);
-      if (KillSwitch.active) log.add('app', '«Рубильник» держит интернет закрытым');
       if (retry) {
         await Future.delayed(const Duration(seconds: 3));
         await connect();
