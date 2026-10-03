@@ -613,7 +613,7 @@ class _SessionView extends StatelessWidget {
                       'по приложениям к ним не применились.\nОбычно это службы Windows. Но если игра из списка '
                       '«напрямую» идёт через VPN — причина в этом: её соединения помечены в списке.',
                   waitDuration: const Duration(milliseconds: 300),
-                  child: Text('программа не определена: ${s.unknownProcess}',
+                  child: Text('соединений с неизвестной программой: ${s.unknownProcess}',
                       style: TextStyle(color: C.isDark ? C.orangeLight : C.orange, fontSize: 11.5)),
                 ),
             ]),
