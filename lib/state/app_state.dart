@@ -692,12 +692,13 @@ class AppState extends ChangeNotifier {
     for (final url in r.subscriptionUrls) {
       final existing = subscriptions.where((s) => s.url == url).firstOrNull;
       if (existing != null) {
-        await updateSubscription(existing);
-        parts.add('подписка обновлена');
+        // Без отдельного сообщения: итог вставки скажет то же самое одним сообщением.
+        await updateSubscription(existing, silent: true);
+        parts.add(existing.error == null ? 'подписка обновлена' : 'подписка с ошибкой: ${existing.error}');
       } else {
         final sub = Subscription(url: url);
         subscriptions.add(sub);
-        await updateSubscription(sub);
+        await updateSubscription(sub, silent: true);
         parts.add(sub.error == null ? 'подписка «${sub.displayName}»' : 'подписка с ошибкой: ${sub.error}');
       }
     }

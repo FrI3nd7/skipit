@@ -153,15 +153,32 @@ class _ShellState extends State<Shell> {
     _sub ??= AppScope.read(context).messages.listen((msg) {
       if (!mounted) return;
       // Новое уведомление вытесняет прежнее: то плавно уходит, это всплывает на его место.
-      _toast?.currentState?.dismiss();
+      // Если прежнее ещё не успело появиться (два сообщения подряд), оно убирается сразу —
+      // иначе оба остались бы на экране одно поверх другого.
+      final previous = _toast?.currentState;
+      if (previous != null) {
+        previous.dismiss();
+      } else {
+        _toastEntry?.remove();
+      }
       final key = _toast = GlobalKey<_ToastState>();
       late final OverlayEntry entry;
-      entry = OverlayEntry(builder: (_) => _Toast(key: key, text: msg.text, kind: msg.kind, onGone: entry.remove));
+      entry = OverlayEntry(
+          builder: (_) => _Toast(
+              key: key,
+              text: msg.text,
+              kind: msg.kind,
+              onGone: () {
+                if (identical(_toastEntry, entry)) _toastEntry = null;
+                entry.remove();
+              }));
+      _toastEntry = entry;
       Overlay.of(context, rootOverlay: true).insert(entry);
     });
   }
 
   GlobalKey<_ToastState>? _toast;
+  OverlayEntry? _toastEntry;
 
   @override
   void initState() {
