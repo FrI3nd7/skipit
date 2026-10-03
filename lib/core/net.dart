@@ -104,7 +104,9 @@ class Net {
     }
   }
 
-  static Future<void> download(String url, String path, {int? proxyPort}) async {
+  /// [onProgress] — сколько байт уже получено и сколько всего (-1, если сервер не сообщил размер).
+  static Future<void> download(String url, String path,
+      {int? proxyPort, void Function(int received, int total)? onProgress}) async {
     final client = _client(proxyPort);
     try {
       final req = await client.getUrl(Uri.parse(url));
@@ -112,7 +114,16 @@ class Net {
       if (res.statusCode >= 400) throw HttpException('HTTP ${res.statusCode} при загрузке $url');
       final tmp = File('$path.part');
       final sink = tmp.openWrite();
-      await res.pipe(sink);
+      var received = 0;
+      try {
+        await for (final chunk in res) {
+          sink.add(chunk);
+          received += chunk.length;
+          onProgress?.call(received, res.contentLength);
+        }
+      } finally {
+        await sink.close();
+      }
       await tmp.rename(path);
     } finally {
       client.close(force: true);

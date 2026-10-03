@@ -20,19 +20,21 @@ Future<void> installAppUpdate(BuildContext context) async {
   final state = AppScope.read(context);
   final release = state.appUpdate;
   if (release == null) return;
+  if (state.downloadingAppUpdate) return;
+  // Сначала вопрос, потом скачивание: так нажатие сразу даёт ответ, а не десять секунд тишины.
+  final ok = await confirm(context, 'Обновить SkipIt до ${release.version}?',
+      'Программа скачает установщик, затем VPN отключится, программа закроется и откроется установщик новой версии.',
+      ok: 'Скачать и установить');
+  if (!ok) return;
+  state.toast('Скачиваю обновление ${release.version}…', kind: ToastKind.info);
   String? installer;
   try {
     installer = await state.downloadAppUpdate();
   } catch (e) {
-    state.toast('Не удалось скачать обновление: $e');
+    state.toast('Не удалось скачать обновление: ${describeNetError(e)}');
     return;
   }
   if (installer == null) return;
-  if (!context.mounted) return;
-  final ok = await confirm(context, 'Обновить SkipIt до ${release.version}?',
-      'VPN отключится, программа закроется и откроется установщик новой версии.',
-      ok: 'Установить');
-  if (!ok) return;
   await Process.start(installer, const ['/SP-'], mode: ProcessStartMode.detached);
   await state.shutdown();
   await Tray.quit();
@@ -290,7 +292,11 @@ class SettingsPage extends StatelessWidget {
             trailing: Wrap(spacing: 8, children: [
               if (state.appUpdate != null)
                 state.downloadingAppUpdate
-                    ? const Spinner(size: 22)
+                    ? Row(mainAxisSize: MainAxisSize.min, children: [
+                        const Spinner(size: 20),
+                        const SizedBox(width: 8),
+                        Text(state.updateProgressLabel, style: TextStyle(color: C.muted, fontSize: 12.5)),
+                      ])
                     : GradientButton(
                         label: 'Обновить',
                         icon: Icons.download_rounded,

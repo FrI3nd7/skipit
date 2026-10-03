@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:skipit/core/link_parser.dart';
+import 'package:skipit/core/net.dart';
 import 'package:skipit/core/singbox_config.dart';
 import 'package:skipit/core/updates.dart';
 import 'package:skipit/core/util.dart';
@@ -122,6 +123,32 @@ void main() {
 
     await expectLater(Updates.verify(f.path, '0' * 64), throwsA(isA<Exception>()));
     expect(f.existsSync(), isFalse, reason: 'подменённый файл должен быть удалён');
+  });
+
+  test('скачивание сообщает, сколько уже получено, — окно показывает проценты', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final body = List<int>.generate(300000, (i) => i % 251);
+    server.listen((req) async {
+      req.response.contentLength = body.length;
+      // Отдаём частями, как настоящая сеть.
+      for (var i = 0; i < body.length; i += 50000) {
+        req.response.add(body.sublist(i, i + 50000));
+        await req.response.flush();
+      }
+      await req.response.close();
+    });
+    final path = '${Directory.systemTemp.path}\\skipit-download-test.bin';
+    final seen = <(int, int)>[];
+    await Net.download('http://127.0.0.1:${server.port}/file', path, onProgress: (got, total) => seen.add((got, total)));
+    await server.close(force: true);
+
+    expect(File(path).readAsBytesSync(), body);
+    expect(seen.last, (body.length, body.length));
+    expect(seen.every((p) => p.$2 == body.length), isTrue);
+    // Получено растёт без скачков назад.
+    expect([for (final p in seen) p.$1], [for (final p in seen) p.$1]..sort());
+    expect(File('$path.part').existsSync(), isFalse);
+    await File(path).delete();
   });
 
   test('адреса обновления строятся из тега релиза, без API GitHub', () {

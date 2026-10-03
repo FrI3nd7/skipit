@@ -746,7 +746,10 @@ class _VersionRow extends StatelessWidget {
     final state = AppScope.of(context);
     final hasUpdate = state.appUpdate != null;
     final title = 'Версия $appVersion${AppPaths.isDev ? ' dev' : ''}';
-    final action = state.checkingUpdates
+    final downloading = state.downloadingAppUpdate;
+    final action = downloading
+        ? state.updateProgressLabel
+        : state.checkingUpdates
         ? 'Проверяю обновления…'
         : hasUpdate
             ? 'Установить ${state.appUpdate!.version}'
@@ -760,7 +763,7 @@ class _VersionRow extends StatelessWidget {
         builder: (context, hovered) => GestureDetector(
           behavior: HitTestBehavior.opaque,
           // Есть обновление — строка сразу его ставит (с подтверждением), а не уводит в настройки.
-          onTap: state.checkingUpdates
+          onTap: state.checkingUpdates || downloading
               ? null
               : hasUpdate
                   ? () => installAppUpdate(context)
@@ -778,7 +781,7 @@ class _VersionRow extends StatelessWidget {
               SizedBox(
                 width: 20,
                 child: Center(
-                  child: state.checkingUpdates
+                  child: state.checkingUpdates || downloading
                       ? const Spinner(size: 18, icon: Icons.sync_rounded)
                       : Icon(hasUpdate ? Icons.download_rounded : Icons.sync_rounded,
                           size: 18, color: hasUpdate || hovered ? C.orange : C.muted),

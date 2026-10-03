@@ -1535,11 +1535,20 @@ class AppState extends ChangeNotifier {
 
   bool downloadingAppUpdate = false;
 
+  /// Сколько установщика уже скачано, от 0 до 1; null — размер неизвестен или скачивание не идёт.
+  double? updateProgress;
+
+  /// Подпись хода скачивания для окна: «Скачиваю обновление… 43 %».
+  String get updateProgressLabel => updateProgress == null
+      ? 'Скачиваю обновление…'
+      : 'Скачиваю обновление… ${(updateProgress! * 100).round()} %';
+
   /// Скачивает установщик новой версии SkipIt из релиза на GitHub и сверяет его контрольную сумму.
   Future<String?> downloadAppUpdate() async {
     final release = appUpdate;
     if (release == null || downloadingAppUpdate) return null;
     downloadingAppUpdate = true;
+    updateProgress = null;
     notifyListeners();
     try {
       // Программа обычно работает с правами администратора и запускает установщик с ними же. Поэтому
@@ -1554,7 +1563,14 @@ class AppState extends ChangeNotifier {
         } catch (_) {}
       }
       final path = '${dir.path}\\${release.installerName}';
-      await Net.download(release.installerUrl, path, proxyPort: _updateProxy);
+      await Net.download(release.installerUrl, path, proxyPort: _updateProxy, onProgress: (received, total) {
+        if (total <= 0) return;
+        final p = (received / total).clamp(0.0, 1.0);
+        // Окно перерисовывается на каждый процент, а не на каждый полученный кусок файла.
+        if (updateProgress != null && (p * 100).floor() == (updateProgress! * 100).floor()) return;
+        updateProgress = p;
+        notifyListeners();
+      });
       // Запускаем только то, что совпало с контрольной суммой из релиза.
       final expected = await Updates.expectedSha256(release, proxyPort: _updateProxy);
       await Updates.verify(path, expected);
@@ -1562,6 +1578,7 @@ class AppState extends ChangeNotifier {
       return path;
     } finally {
       downloadingAppUpdate = false;
+      updateProgress = null;
       notifyListeners();
     }
   }
