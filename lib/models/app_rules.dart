@@ -63,12 +63,22 @@ class AppEntry {
   /// обновляются сами, exe лежит в папке версии, и после обновления путь меняется — правило перестало
   /// бы совпадать, а программа молча пошла бы мимо него. Для них берётся папка программы целиком
   /// (`…/Discord/app-1.0.9260/Discord.exe` → `…/Discord/`): она не меняется и включает помощников.
+  ///
+  /// У программ из Microsoft Store версия стоит в имени самой папки программы
+  /// (`…/WindowsApps/SpotifyAB.SpotifyMusic_1.302.258.0_x64__zpdnekdrzrea0/Spotify.exe`), и общей
+  /// неизменной папки у них нет: рядом в `WindowsApps` лежат все остальные программы из магазина.
+  /// Для них правилом становится имя процесса (`Spotify`).
   static String matchForExe(String path) {
     final s = normalizePath(path);
     final parts = s.split('/');
+    final store = parts.indexWhere((p) => p.toLowerCase() == 'windowsapps');
+    if (store >= 0 && store + 2 < parts.length && _storePackage.hasMatch(parts[store + 1])) return nameFromPath(s);
     final i = parts.indexWhere(_versionDir.hasMatch);
     return i > 0 ? '${parts.take(i).join('/')}/' : s;
   }
+
+  /// Папка программы из Microsoft Store: `Имя_Версия_Архитектура_Ресурс_КодИздателя`.
+  static final _storePackage = RegExp(r'^[\w.\-]+_\d+(\.\d+){1,3}_\w*_[\w.\-~]*_[a-z0-9]{13}$', caseSensitive: false);
 
   static String normalizeFolder(String path) {
     final s = normalizePath(path);

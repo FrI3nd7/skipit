@@ -87,6 +87,23 @@ void main() {
     expect(AppEntry.matchForExe(r'C:\Apps\Steam\steam.exe'), 'C:/Apps/Steam/steam.exe');
     expect(AppEntry.matchForExe(r'D:\app-store\tool.exe'), 'D:/app-store/tool.exe');
 
+    // Программы из Microsoft Store: версия в имени папки, общей неизменной папки нет — правило по имени.
+    const spotify = r'C:\Program Files\WindowsApps\SpotifyAB.SpotifyMusic_1.302.258.0_x64__zpdnekdrzrea0\Spotify.exe';
+    expect(AppEntry.matchForExe(spotify), 'Spotify');
+    expect(
+        AppEntry.matchForExe(r'C:\Program Files\WindowsApps\Claude_2.19675.0.0_x64__pzs8sxrjxfjjc\app\claude.exe'), 'claude');
+    // Обычная папка с похожим именем правилом по имени не становится.
+    expect(AppEntry.matchForExe(r'D:\WindowsApps\tools\tool.exe'), 'D:/WindowsApps/tools/tool.exe');
+    // Запись прежней версии с путём переводится на имя, а путь остаётся для значка.
+    final store = AppRules.fromJson({
+      'mode': 'allExcept',
+      'entries': [
+        {'match': spotify.replaceAll(r'\', '/'), 'label': 'Spotify'},
+      ],
+    });
+    expect((store.entries.single.match, store.entries.single.exe), ('Spotify', spotify.replaceAll(r'\', '/')));
+    expect(store.entries.single.isPath, isFalse);
+
     // Записи, сохранённые прежними версиями, исправляются при загрузке; повторы сливаются.
     final rules = AppRules.fromJson({
       'mode': 'onlySelected',
