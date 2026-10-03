@@ -151,6 +151,18 @@ void main() {
     await File(path).delete();
   });
 
+  test('отказ Windows запустить установщик объясняется словами', () {
+    // Так отвечает Windows при включённом Интеллектуальном контроле приложений.
+    final blocked = Updates.launchFailure(const ProcessException('setup.exe', [], 'blocked', 4551));
+    expect(blocked, contains('не подписан'));
+    expect(blocked, contains('Интеллектуальный контроль приложений'));
+    expect(Updates.launchFailure(const ProcessException('setup.exe', [], 'virus', 225)), contains('Антивирус'));
+    final other = Updates.launchFailure(const ProcessException('setup.exe', [], 'Отказано в доступе.', 5));
+    expect(other, contains('Отказано в доступе'));
+    expect(other, contains('код 5'));
+    expect(Updates.launchFailure(Exception('x')), contains('Windows не дала его запустить'));
+  });
+
   test('адреса обновления строятся из тега релиза, без API GitHub', () {
     final r = Release('v1.0.4', 'getskipit/skipit');
     expect(r.version, '1.0.4');

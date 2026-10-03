@@ -35,7 +35,18 @@ Future<void> installAppUpdate(BuildContext context) async {
     return;
   }
   if (installer == null) return;
-  await Process.start(installer, const ['/SP-'], mode: ProcessStartMode.detached);
+  try {
+    await Process.start(installer, const ['/SP-'], mode: ProcessStartMode.detached);
+  } catch (e) {
+    // Windows не дала запустить установщик (например, защита от неподписанных программ). Раньше это
+    // проходило молча: программа оставалась открытой, и было непонятно, что обновление не случилось.
+    state.log.add('update', 'Не удалось запустить установщик: ${Updates.launchFailure(e)}');
+    if (!context.mounted) return;
+    final show = await confirm(context, 'Windows не разрешила запустить установщик', Updates.launchFailure(e),
+        ok: 'Показать файл');
+    if (show) await Process.run('explorer', ['/select,$installer']);
+    return;
+  }
   await state.shutdown();
   await Tray.quit();
   exit(0);
