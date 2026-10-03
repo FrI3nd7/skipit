@@ -15,6 +15,45 @@ import 'package:skipit/ui/theme.dart';
 void main() {
   setUpAll(AppPaths.init);
 
+  testWidgets('счётчик повторов строки раскрывается и показывает время каждого повтора', (tester) async {
+    C.use(Palette.dark);
+    tester.view.physicalSize = const Size(1200, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final state = AppState();
+    state.routingProfiles.addAll([RoutingProfile.global(), ...RoutingProfile.templates()]);
+    state.log.startSession('Сервер');
+    for (var i = 0; i < 3; i++) {
+      state.log.add('xray', '2026/10/04 02:55:0$i.511059 [Warning] [${2743236246 + i}] proxy/http: failed to read '
+          'response from site.example > unexpected EOF');
+    }
+    final line = state.log.lines.single;
+    expect((line.repeats, line.repeatTimes.length), (3, 2));
+
+    await tester.pumpWidget(AppScope(
+      state: state,
+      child: MaterialApp(theme: buildTheme(), home: const Shell()),
+    ));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.byIcon(Icons.receipt_long_rounded).first);
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.textContaining('Повторилась'), findsNothing);
+    await tester.tap(find.text('×3'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.textContaining('Повторилась'), findsOneWidget);
+    // Новый повтор при раскрытом списке добавляется в него же.
+    state.log.add('xray', '2026/10/04 02:55:09.000000 [Warning] [1] proxy/http: failed to read '
+        'response from site.example > unexpected EOF');
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('×4'), findsOneWidget);
+    await tester.tap(find.text('×4'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.textContaining('Повторилась'), findsNothing);
+    state.log.endSession();
+  });
+
   testWidgets('пока журнал читают (прокрутили вверх), новые строки его не двигают', (tester) async {
     C.use(Palette.dark);
     tester.view.physicalSize = const Size(1200, 800);

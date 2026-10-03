@@ -16,6 +16,19 @@ class LogLine {
   /// Когда строка повторилась в последний раз.
   late DateTime lastSeen = time;
 
+  /// Время каждого повтора (без первого появления — оно в [time]). Хранятся только последние
+  /// [maxRepeatTimes]: строка может повторяться тысячи раз.
+  final repeatTimes = <DateTime>[];
+  static const maxRepeatTimes = 200;
+
+  /// Ещё один повтор строки.
+  void repeated(DateTime at) {
+    repeats += 1;
+    lastSeen = at;
+    repeatTimes.add(at);
+    if (repeatTimes.length > maxRepeatTimes) repeatTimes.removeAt(0);
+  }
+
   /// 2 — ошибка, 1 — предупреждение, 0 — обычная строка.
   late final int level = _levelOf(text);
 
@@ -446,9 +459,7 @@ class LogBuffer extends ChangeNotifier {
         if (shown != null &&
             now.difference(shown.lastSeen) < _repeatGap &&
             now.difference(shown.time) < _repeatSpan) {
-          shown
-            ..repeats += 1
-            ..lastSeen = now;
+          shown.repeated(now);
           continue;
         }
         if (_recent.length > 300) _recent.clear();

@@ -818,12 +818,27 @@ int? _indexFromEnd<T>(List<T> items, T item) {
   return i < 0 ? null : items.length - 1 - i;
 }
 
-class _LineText extends StatelessWidget {
+/// Строка журнала. Если ядро повторило её несколько раз, в конце стоит счётчик «×N» — клик по нему
+/// раскрывает время каждого повтора.
+class _LineText extends StatefulWidget {
   const _LineText(this.line, {super.key});
   final LogLine line;
 
   @override
+  State<_LineText> createState() => _LineTextState();
+}
+
+class _LineTextState extends State<_LineText> {
+  bool _open = false;
+
+  static const _style = TextStyle(fontFamily: 'Consolas', fontSize: 12, height: 1.5);
+
+  static String _clock(DateTime t) => '${_two(t.hour)}:${_two(t.minute)}:${_two(t.second)}';
+
+  @override
   Widget build(BuildContext context) {
+    final line = widget.line;
+    final orange = C.isDark ? C.orangeLight : C.orange;
     final t = line.time;
     final hint = LogExplain.of(line.source, line.text);
     final color = switch (line.level) {
@@ -831,26 +846,74 @@ class _LineText extends StatelessWidget {
       1 => C.isDark ? C.orangeLight : C.orange,
       _ => C.text,
     };
-    return Text.rich(
+    final text = Text.rich(
       TextSpan(children: [
-        TextSpan(text: '${_two(t.hour)}:${_two(t.minute)}:${_two(t.second)} ', style: TextStyle(color: C.muted)),
+        TextSpan(text: '${_clock(t)} ', style: TextStyle(color: C.muted)),
         TextSpan(text: '[${line.source}] ', style: TextStyle(color: C.cyan)),
         TextSpan(text: line.text, style: TextStyle(color: color)),
         // Одинаковые строки ядра не повторяются в журнале — у первой растёт счётчик.
-        if (line.repeats > 1)
-          TextSpan(
-            text: '  ×${line.repeats}',
-            style: TextStyle(color: C.isDark ? C.orangeLight : C.orange, fontWeight: FontWeight.w700),
-          ),
+        if (line.repeats > 1) ...[
+          const TextSpan(text: '  '),
+          WidgetSpan(alignment: PlaceholderAlignment.middle, child: _repeatsButton(line, orange)),
+        ],
         if (hint != null)
           TextSpan(
             text: '\n         ↳ $hint',
             style: TextStyle(color: C.muted, fontFamily: 'Segoe UI', fontSize: 12),
           ),
       ]),
-      style: const TextStyle(fontFamily: 'Consolas', fontSize: 12, height: 1.5),
+      style: _style,
     );
+    if (!_open || line.repeats < 2) return text;
+
+    // Раскрыто: время каждого повтора. Самые ранние могли не сохраниться — строка повторялась слишком долго.
+    final missing = line.repeats - 1 - line.repeatTimes.length;
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      text,
+      Padding(
+        padding: const EdgeInsets.only(left: 30, top: 2, bottom: 4),
+        child: Text.rich(
+          TextSpan(children: [
+            TextSpan(text: 'Повторилась: ', style: TextStyle(color: C.muted, fontFamily: 'Segoe UI')),
+            if (missing > 0) TextSpan(text: '… ещё $missing раньше, ', style: TextStyle(color: C.muted)),
+            TextSpan(text: line.repeatTimes.map(_clock).join('  '), style: TextStyle(color: C.text)),
+          ]),
+          style: _style,
+        ),
+      ),
+    ]);
   }
+
+  /// Счётчик повторов — кнопка: стрелка и курсор-«рука» показывают, что её можно нажать.
+  Widget _repeatsButton(LogLine line, Color orange) => Tooltip(
+        message: _open ? 'Свернуть' : 'Показать время каждого повтора',
+        waitDuration: const Duration(milliseconds: 600),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Hover(
+            builder: (context, hovered) => GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: () => setState(() => _open = !_open),
+              child: Container(
+                padding: const EdgeInsets.fromLTRB(6, 0, 2, 0),
+                decoration: BoxDecoration(
+                  color: hovered || _open ? orange.withValues(alpha: 0.16) : C.surface2,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: hovered || _open ? orange.withValues(alpha: 0.6) : C.border),
+                ),
+                child: DefaultSelectionStyle.merge(
+                  mouseCursor: SystemMouseCursors.click,
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text('×${line.repeats}',
+                        style: TextStyle(color: orange, fontSize: 11, fontWeight: FontWeight.w700, height: 1.4)),
+                    Icon(_open ? Icons.expand_more_rounded : Icons.chevron_right_rounded, size: 14, color: orange),
+                  ]),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
 }
 
 String _routeLabel(ConnRoute r) => switch (r) {
