@@ -991,7 +991,8 @@ class _ConnGroupText extends StatelessWidget {
                       child: Icon(Icons.chevron_right_rounded, size: 16, color: hovered || open ? C.orange : C.muted),
                     ),
                   ),
-                  Flexible(child: head),
+                  // Внутри области выделения над текстом по умолчанию курсор «для текста» — здесь строка нажимается.
+                  Flexible(child: DefaultSelectionStyle.merge(mouseCursor: SystemMouseCursors.click, child: head)),
                   Container(
                     margin: const EdgeInsets.only(left: 8, right: 4),
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
@@ -1000,8 +1001,11 @@ class _ConnGroupText extends StatelessWidget {
                       borderRadius: BorderRadius.circular(8),
                       border: Border.all(color: hovered || open ? C.orange.withValues(alpha: 0.6) : C.border),
                     ),
-                    child: Text('×$count',
-                        style: TextStyle(color: C.text, fontSize: 11, fontWeight: FontWeight.w700)),
+                    child: DefaultSelectionStyle.merge(
+                      mouseCursor: SystemMouseCursors.click,
+                      child: Text('×$count',
+                          style: TextStyle(color: C.text, fontSize: 11, fontWeight: FontWeight.w700)),
+                    ),
                   ),
                 ]),
               ),
