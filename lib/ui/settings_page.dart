@@ -237,6 +237,48 @@ class SettingsPage extends StatelessWidget {
               onPressed: () => Process.run('explorer', [AppPaths.dataDir.path]),
             ),
           ),
+          // Подписки на диске зашифрованы для этой учётной записи Windows: перенести их на другой
+          // компьютер копированием папки нельзя — для этого экспорт и импорт.
+          _Row(
+            title: 'Перенос настроек',
+            subtitle: 'Подписки хранятся зашифрованными для вашей учётной записи Windows. '
+                'Для переноса на другой компьютер сохраните их в файл',
+            trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+              GhostButton(
+                label: 'Экспорт',
+                icon: Icons.upload_rounded,
+                onPressed: () async {
+                  final ok = await confirm(context, 'Сохранить настройки в файл?',
+                      'В файле будут ссылки подписок и ключи серверов открытым текстом. '
+                          'Храните его как пароль и удалите после переноса.');
+                  if (!ok) return;
+                  final dir = await WinSys.pickFolder();
+                  if (dir == null) return;
+                  try {
+                    final path = await state.exportData(dir);
+                    state.toast('Сохранено: ${path.split(r'\').last}');
+                  } catch (e) {
+                    state.toast('Не удалось сохранить файл: ${describeNetError(e)}');
+                  }
+                },
+              ),
+              const SizedBox(width: 8),
+              GhostButton(
+                label: 'Импорт',
+                icon: Icons.download_rounded,
+                onPressed: () async {
+                  final path = await WinSys.pickFile(filter: 'Настройки SkipIt (*.json)|*.json');
+                  if (path == null || !context.mounted) return;
+                  final ok = await confirm(context, 'Заменить настройки?',
+                      'Текущие подписки, серверы и настройки будут заменены содержимым файла.');
+                  if (!ok) return;
+                  final error = await state.importData(path);
+                  state.toast(error ?? 'Настройки загружены из файла',
+                      kind: error == null ? ToastKind.success : ToastKind.error);
+                },
+              ),
+            ]),
+          ),
           _Row(
             title: 'Версия SkipIt',
             subtitle: [

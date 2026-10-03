@@ -253,8 +253,38 @@ std::wstring KillSwitchEngage(const std::vector<std::wstring>& apps, const std::
   return std::wstring();
 }
 
-void KillSwitchRelease() {
-  if (!g_engine) return;
-  FwpmEngineClose0(g_engine);
+unsigned long KillSwitchRelease() {
+  if (!g_engine) return ERROR_SUCCESS;
+  const DWORD rc = FwpmEngineClose0(g_engine);
   g_engine = nullptr;
+  return rc;
+}
+
+bool KillSwitchEngaged() { return g_engine != nullptr; }
+
+int KillSwitchCountFilters() {
+  HANDLE engine = nullptr;
+  if (FwpmEngineOpen0(nullptr, RPC_C_AUTHN_WINNT, nullptr, nullptr, &engine) != ERROR_SUCCESS) return -1;
+  int count = -1;
+  HANDLE handle = nullptr;
+  if (FwpmFilterCreateEnumHandle0(engine, nullptr, &handle) == ERROR_SUCCESS) {
+    count = 0;
+    for (;;) {
+      FWPM_FILTER0** filters = nullptr;
+      UINT32 returned = 0;
+      if (FwpmFilterEnum0(engine, handle, 256, &filters, &returned) != ERROR_SUCCESS) {
+        count = -1;
+        break;
+      }
+      for (UINT32 i = 0; i < returned; i++) {
+        const wchar_t* name = filters[i]->displayData.name;
+        if (name && wcscmp(name, L"SkipIt kill switch") == 0) count++;
+      }
+      FwpmFreeMemory0(reinterpret_cast<void**>(&filters));
+      if (returned < 256) break;
+    }
+    FwpmFilterDestroyEnumHandle0(engine, handle);
+  }
+  FwpmEngineClose0(engine);
+  return count;
 }

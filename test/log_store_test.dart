@@ -1,8 +1,10 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:skipit/core/core_manager.dart';
 import 'package:skipit/core/log_explain.dart';
-import 'package:skipit/core/log_store.dart';
+import 'package:skipit/core/util.dart';
+import 'package:skipit/state/app_state.dart';
 
 /// Журнал разбит на отрезки по подключениям, каждый отрезок — файл; журнал дня живёт 5 дней.
 void main() {
@@ -32,6 +34,26 @@ void main() {
     expect((s.host, s.port, s.route), ('tls.example', 443, ConnRoute.direct));
   });
 
+  test('соединение, для которого ядро не узнало программу, находится по адресу программы', () {
+    // Адрес программы есть и в строке журнала доступа, и в строке ядра о неудаче.
+    final c = ConnEntry.tryParse(
+        'from udp:172.19.0.1:63662 accepted udp:203.0.113.9:22102 [skipit-tun -> proxy]', const {'proxy': ConnRoute.proxy})!;
+    expect((c.source, c.unknownProcess), ('172.19.0.1:63662', false));
+    expect(ConnEntry.tryParse('from 127.0.0.1:50168 accepted //tls.example:443 [http -> direct]', const {})!.source,
+        '127.0.0.1:50168');
+    expect(
+        AppState.unknownProcessSource('2026/10/04 00:10:11.1 [Error] app/router: Unables to find local process name: '
+            'process not found for udp:172.19.0.1:63662'),
+        '172.19.0.1:63662');
+    expect(AppState.unknownProcessSource('[Error] app/router: Unables to find local process name: Access is denied.'), isNull);
+
+    final log = LogBuffer()..startSession('Сервер');
+    expect(log.addUnknownProcess(), 1);
+    expect(log.addUnknownProcess(), 2);
+    expect(log.sessions.single.unknownProcess, 2);
+    log.endSession();
+  });
+
   test('соединения хранятся только в памяти: список сайтов на диск не пишется', () async {
     final log = LogBuffer();
     await log.open(dir);
@@ -41,6 +63,170 @@ void main() {
     log.endSession();
     expect(log.sessions.single.connections, hasLength(1));
     expect(log.sessions.single.file!.readAsStringSync(), isNot(contains('secret.example')));
+  });
+
+  test('строки sing-box: команды раскраски убираются, успешный ответ DNS — не ошибка', () {
+    // Так sing-box пишет на уровне debug: слово уровня и номер соединения раскрашены для консоли.
+    const raw = '\x1B[36mINFO\x1B[0m [\x1B[38;5;85m2435357074\x1B[0m 74ms] dns: exchanged catalog.gamepass.com NOERROR 18';
+    final text = CoreProcess.clean(raw);
+    expect(text, 'INFO [2435357074 74ms] dns: exchanged catalog.gamepass.com NOERROR 18');
+    expect(LogLine('sing-box', text).level, 0);
+    // Настоящие ошибки и предупреждения остаются.
+    expect(LogLine('sing-box', CoreProcess.clean('\x1B[31mERROR\x1B[0m connection: i/o timeout')).level, 2);
+    expect(LogLine('sing-box', 'WARN inbound/tun: open interface take too much time').level, 1);
+    expect(CoreProcess.clean('обычная строка [0m] без команд'), 'обычная строка [0m] без команд');
+  });
+
+  test('одинаковые соединения склеиваются в группу; свежие обращения — в конце', () {
+    ConnEntry conn(String host, ConnRoute route, [String network = 'tcp']) =>
+        ConnEntry(network: network, host: host, port: 443, inbound: 'http', outbound: route.name, route: route);
+    final groups = groupConnections([
+      conn('a.example', ConnRoute.proxy),
+      conn('b.example', ConnRoute.proxy),
+      conn('a.example', ConnRoute.proxy),
+      // Тот же сайт другим путём или по другой сети — отдельная строка.
+      conn('a.example', ConnRoute.direct),
+      conn('b.example', ConnRoute.proxy, 'udp'),
+      conn('a.example', ConnRoute.proxy),
+    ]);
+    expect([for (final g in groups) (g.last.host, g.last.route, g.last.network, g.items.length)], [
+      ('b.example', ConnRoute.proxy, 'tcp', 1),
+      ('a.example', ConnRoute.direct, 'tcp', 1),
+      ('b.example', ConnRoute.proxy, 'udp', 1),
+      ('a.example', ConnRoute.proxy, 'tcp', 3),
+    ]);
+  });
+
+  test('обычные строки ядер получают пояснение простыми словами', () {
+    String? x(String line) => LogExplain.of('xray', line);
+    String? s(String line) => LogExplain.of('sing-box', line);
+    // Строки в том виде, как их пишут ядра (взяты из журнала).
+    expect(x('2026/10/03 20:30:09.025940 [Debug] [3705316341] proxy: XtlsPadding 80 1133 0'), contains('debug'));
+    expect(x('[Info] [2701967293] proxy/dns: rejected type TypePTR query for domain 95.205.125.74.in-addr.arpa.'),
+        contains('обратный запрос'));
+    expect(x('[Debug] app/dns: domain p2p-sto2.discovery.steamserver.net will use DNS in order: [DOHL//dns.example]'),
+        contains('p2p-sto2.discovery.steamserver.net'));
+    expect(x('[Info] app/dns: DOHL//dns.example querying: p2p-sto2.discovery.steamserver.net.'),
+        'Ядро спрашивает у DNS-сервера адрес p2p-sto2.discovery.steamserver.net.');
+    expect(
+        x('[Info] app/dns: DOHL//dns.example got answer: p2p-sto2.discovery.steamserver.net. TypeA -> [155.133.252.54], rtt: 60.9583ms, lock: 0s'),
+        contains('за 61 мс'));
+    expect(x('[Info] [593965005] app/dispatcher: taking detour [proxy-2] for [tcp:ipv6.msftconnecttest.com:80]'),
+        'Для соединения с ipv6.msftconnecttest.com:80 ядро выбрало путь «proxy-2».');
+    expect(x('[Info] [593965005] proxy/vless/outbound: tunneling request to tcp:ipv6.msftconnecttest.com:80 via fi.example:2096'),
+        contains('через VPN-сервер'));
+    expect(s('INFO [2014162670 0ms] router: found process path: D:\\vpn\\build\\dev\\core\\skipit-xray.exe'),
+        'Соединение открыла программа skipit-xray.exe.');
+    expect(s('INFO [1 0ms] outbound/direct[direct]: outbound connection to 144.31.53.51:443'), contains('напрямую'));
+    expect(s('DEBUG [1 0ms] router: match[2] process_name=[skipit-xray.exe skipit-sing-box.exe] => route(direct)'),
+        contains('напрямую'));
+    // Отказ в доступе к чужому процессу — это не «нужны права администратора».
+    expect(s('INFO [3107459377 0ms] router: failed to search process: Access is denied.'), contains('какая программа'));
+    expect(x('[Error] app/router: Unables to find local process name: Access is denied.'), contains('какая программа'));
+    // Прежние пояснения к сбоям не перебиты новыми.
+    expect(x('[Warning] [1] proxy/http: failed to read response from ipv6.msftconnecttest.com > unexpected EOF'),
+        contains('IPv6'));
+  });
+
+  test('отказ сервера подписки объясняется по коду; окончательный отказ не повторяют другим путём', () {
+    expect(describeNetError(ServerRefused(402)), 'Сервер сообщает, что подписка не оплачена или закончилась (код 402)');
+    expect(ServerRefused(402).isFinal, isTrue);
+    expect(ServerRefused(404).reason, contains('не найдена'));
+    expect(ServerRefused(403).reason, contains('отказал в доступе'));
+    // Сбой на стороне сервера и просьба подождать — не окончательный отказ.
+    expect(ServerRefused(502).isFinal, isFalse);
+    expect(ServerRefused(429).isFinal, isFalse);
+    // Строка журнала с таким текстом считается ошибкой.
+    expect(LogLine('subscription', 'Провайдер: не удалось обновить подписку — ${ServerRefused(402).reason}').level, 2);
+  });
+
+  test('длинный журнал продолжается в следующих частях; события программы пишутся всегда', () async {
+    final saved = LogBuffer.fileLimit;
+    LogBuffer.fileLimit = 2000;
+    addTearDown(() => LogBuffer.fileLimit = saved);
+
+    final log = LogBuffer();
+    await log.open(dir);
+    log.startSession('Сервер', detail: 'TUN');
+    // Разные строки (одинаковые склеились бы в одну со счётчиком).
+    for (var i = 0; i < 400; i++) {
+      log.add('xray', 'line $i ${'x' * 40}');
+    }
+    // Все части заполнены — строка ядра в файл уже не идёт, строка программы идёт.
+    log
+      ..add('xray', 'after the limit')
+      ..add('app', 'Отключено')
+      ..endSession();
+
+    final files = dir.listSync().whereType<File>().map((f) => f.uri.pathSegments.last).toList()..sort();
+    expect(files, hasLength(LogBuffer.maxParts));
+    final s = log.sessions.single;
+    expect(s.parts, hasLength(LogBuffer.maxParts - 1));
+    final text = s.files.map((f) => f.readAsStringSync()).join();
+    expect(text, contains('line 0 '));
+    expect(text, contains('Отключено'));
+    expect(text, isNot(contains('after the limit')));
+    // Каждая часть не больше лимита (плюс одна строка и заголовок).
+    for (final f in s.files) {
+      expect(f.lengthSync(), lessThan(2000 + 400));
+    }
+
+    // После перезапуска программы подключение остаётся одним отрезком со всеми строками.
+    final again = LogBuffer();
+    await again.open(dir);
+    expect(again.sessions, hasLength(1));
+    final loaded = again.sessions.single;
+    expect((loaded.title, loaded.parts.length), ('Сервер', LogBuffer.maxParts - 1));
+    await again.load(loaded);
+    expect(loaded.lines!.first.text, startsWith('line 0 '));
+    expect(loaded.lines!.last.text, 'Отключено');
+    // Строки идут по порядку частей.
+    final numbers = [for (final l in loaded.lines!) if (l.text.startsWith('line ')) int.parse(l.text.split(' ')[1])];
+    expect(numbers, [...numbers]..sort());
+    again.remove(loaded);
+    expect(dir.listSync().whereType<File>(), isEmpty);
+  });
+
+  test('вид всплывающего сообщения узнаётся по тексту: успех, ошибка или сведение', () {
+    for (final text in [
+      'Подписка «SkipIt VPN» обновлена — серверов: 4',
+      'Журнал скопирован',
+      'Ссылка на профиль скопирована',
+      'Сохранено: SkipIt — настройки 2026-10-04.json',
+      'Добавлено: серверов: 2',
+      'У вас последняя версия',
+    ]) {
+      expect(ToastMessage.kindOf(text), ToastKind.success, reason: text);
+    }
+    for (final text in [
+      'Не удалось обновить «Провайдер»: Сервер сообщает, что подписка не оплачена или закончилась (код 402)',
+      'Ошибка проверки: нет свободных портов',
+      'Добавлено: подписка с ошибкой: Сервер не ответил вовремя',
+      'Ничего не найдено',
+      'Сначала отключите VPN',
+      'Это не файл настроек SkipIt',
+    ]) {
+      expect(ToastMessage.kindOf(text), ToastKind.error, reason: text);
+    }
+    for (final text in ['Буфер обмена пуст', 'Уже в списке', 'Тестовая сборка не обновляется из релизов',
+        'Доступна новая версия SkipIt: 1.0.6']) {
+      expect(ToastMessage.kindOf(text), ToastKind.info, reason: text);
+    }
+  });
+
+  test('соединения считаются все, хотя в списке остаются только последние', () {
+    final log = LogBuffer()..startSession('Сервер');
+    ConnEntry conn(int i, ConnRoute route) =>
+        ConnEntry(network: 'tcp', host: 'h$i.example', port: 443, inbound: 'socks', outbound: route.name, route: route);
+    for (var i = 0; i < LogBuffer.maxConnections + 500; i++) {
+      log.addConnection(conn(i, i % 10 == 0 ? ConnRoute.direct : ConnRoute.proxy));
+    }
+    log.addConnection(conn(-1, ConnRoute.block));
+    final s = log.sessions.single;
+    expect(s.connections, hasLength(LogBuffer.maxConnections));
+    expect(s.connectionsTotal, LogBuffer.maxConnections + 501);
+    expect(s.connectionCounts, {ConnRoute.proxy: 2250, ConnRoute.direct: 250, ConnRoute.block: 1});
+    log.endSession();
   });
 
   test('одинаковые строки ядра не засоряют журнал: одна строка со счётчиком', () async {

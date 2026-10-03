@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 
@@ -24,6 +25,25 @@ import '../version.dart';
 
 enum ConnStatus { disconnected, connecting, connected, disconnecting }
 
+/// Вид всплывающего сообщения: от него зависят значок и время показа.
+enum ToastKind { success, error, info }
+
+class ToastMessage {
+  ToastMessage(this.text, this.kind);
+  final String text;
+  final ToastKind kind;
+
+  static final _error = RegExp(r'не удалось|ошибк|не найден|не действует|заблокирован|отказ|сначала |не файл|повреждён',
+      caseSensitive: false);
+  static final _success = RegExp(r'обновлен|добавлен|сохранен|скопирован|загружен|последняя версия',
+      caseSensitive: false);
+
+  /// Сообщения программа пишет сама, поэтому вид узнаётся по словам: «не удалось», «ошибка» — сбой,
+  /// «обновлена», «скопирован», «сохранено» — успех. Остальное — просто сведение.
+  static ToastKind kindOf(String text) =>
+      _error.hasMatch(text) ? ToastKind.error : (_success.hasMatch(text) ? ToastKind.success : ToastKind.info);
+}
+
 class NeedAdminException implements Exception {
   @override
   String toString() => 'Для режима TUN нужны права администратора';
@@ -38,8 +58,8 @@ class AppState extends ChangeNotifier {
 
   final log = LogBuffer();
   final stats = TrafficStats();
-  final _messages = StreamController<String>.broadcast();
-  Stream<String> get messages => _messages.stream;
+  final _messages = StreamController<ToastMessage>.broadcast();
+  Stream<ToastMessage> get messages => _messages.stream;
 
   late final CoreProcess _xray = CoreProcess('xray', log)
     ..onUnexpectedExit = _onCoreCrash
@@ -53,13 +73,153 @@ class AppState extends ChangeNotifier {
   bool _onXrayLine(String line) {
     // Ядро не всегда может узнать, какая программа открыла соединение (служебный трафик Windows),
     // и пишет об этом ошибкой на каждое такое соединение. Правилам это не мешает, а журнал забивает.
-    if (line.contains('Unables to find local process name')) return true;
+    // Сама строка в журнал не идёт, но такие соединения считаются и помечаются в «Соединениях»:
+    // к ним не применилось правило по приложениям, и это может быть игра из списка «напрямую».
+    if (line.contains('Unables to find local process name')) {
+      // Первая такая строка за подключение остаётся в журнале как образец — с причиной от Windows.
+      final first = (log.current?.unknownProcess ?? 0) == 0;
+      _noteUnknownProcess(unknownProcessSource(line));
+      return !first;
+    }
     final c = ConnEntry.tryParse(line, _routes);
-    if (c == null) return false;
-    if (c.route != ConnRoute.dns && c.inbound != 'api') log.addConnection(c);
+    if (c == null) {
+      _watchFirewall('skipit-xray.exe', line);
+      return false;
+    }
+    final failedAt = _unknownSources.remove(c.source);
+    if (failedAt != null && DateTime.now().difference(failedAt) < const Duration(seconds: 3)) c.unknownProcess = true;
+    // Собственная проверка связи — не соединение программы.
+    if (c.route != ConnRoute.dns && c.inbound != 'api' && c.inbound != XrayConfig.checkInTag) log.addConnection(c);
     return true;
   }
-  late final CoreProcess _singbox = CoreProcess('sing-box', log)..onUnexpectedExit = _onCoreCrash;
+  late final CoreProcess _singbox = CoreProcess('sing-box', log)
+    ..onUnexpectedExit = _onCoreCrash
+    ..intercept = (line) {
+      _watchFirewall('skipit-sing-box.exe', line);
+      // Та же ситуация у sing-box (строка видна на уровне журнала info и подробнее).
+      if (line.contains('failed to search process')) _noteUnknownProcess(null);
+      return false;
+    };
+
+  /// Адреса программ, для которых ядро только что не узнало программу: следующая строка журнала
+  /// доступа с тем же адресом — это то самое соединение.
+  final _unknownSources = <String, DateTime>{};
+
+  static final _address = RegExp(r'((?:\d{1,3}\.){3}\d{1,3}|\[[0-9a-fA-F:]+\]):(\d{1,5})');
+
+  /// Локальный адрес программы из строки ядра «Unables to find local process name: …»;
+  /// null — адреса в строке нет.
+  static String? unknownProcessSource(String line) {
+    final at = line.indexOf('Unables to find local process name');
+    if (at < 0) return null;
+    final m = _address.allMatches(line.substring(at)).lastOrNull;
+    return m == null ? null : '${m.group(1)}:${m.group(2)}';
+  }
+
+  void _noteUnknownProcess(String? source) {
+    if (source != null) {
+      if (_unknownSources.length > 500) _unknownSources.clear();
+      _unknownSources[source] = DateTime.now();
+    }
+    final n = log.addUnknownProcess();
+    // В журнал — на 1-м, 10-м, 100-м… соединении: иначе строк было бы столько же, сколько соединений.
+    if (appRules.mode != AppRoutingMode.off && const {1, 10, 100, 1000, 10000}.contains(n)) {
+      log.add('app', 'Ядро не узнало, какая программа открыла соединение (таких уже $n). Правила по приложениям '
+          'к ним не применились — какие это соединения, отмечено на вкладке «Соединения»');
+    }
+  }
+
+  /// Так в журнале ядра выглядит запрет файрвола на выход в сеть (ошибки Windows 10013 и 10057) —
+  /// по-английски и по-русски, как их печатает Windows.
+  static final _firewallLine = RegExp(
+      r'forbidden by its access permissions|socket is not connected|'
+      r'запрещенным правами доступа|сокет не подключен',
+      caseSensitive: false);
+
+  static bool looksLikeFirewall(String line) => _firewallLine.hasMatch(line);
+
+  /// Ядро, которому файрвол не даёт выйти в сеть (имя файла), и сколько раз это встретилось
+  /// в журнале текущего подключения. Одна такая строка бывает случайной, несколько подряд — нет.
+  String? _firewallCore;
+  var _firewallHits = 0;
+
+  void _watchFirewall(String exe, String line) {
+    if (!looksLikeFirewall(line)) return;
+    _firewallCore = exe;
+    if (++_firewallHits == 3) {
+      // Не ждём очередной проверки связи: если ядро и правда не выпускают, это видно сразу.
+      _linkTimer?.cancel();
+      unawaited(_checkLink());
+    }
+  }
+
+  /// Файл ядра, который нужно разрешить в файрволе; null — признаков блокировки нет.
+  /// Показывается, только когда связи через VPN действительно нет.
+  String? get firewallBlockedCore => linkDown && _firewallHits >= 3 ? _firewallCore : null;
+
+  Future<void> showCoreFile(String exe) =>
+      Process.run('explorer', ['/select,${AppPaths.coreDir.path}\\$exe']);
+
+  // --- Проверка связи через VPN ---
+
+  /// Порт входа проверки связи в ядре (см. [XrayConfig.addCheckInbound]).
+  int? _checkPort;
+  Timer? _linkTimer;
+  var _linkFails = 0;
+
+  /// Страна, из которой сайты видят этот компьютер через VPN (код `fi`); null — ещё не узнали.
+  String? exitCountry;
+
+  /// VPN числится подключённым, но запросы через сервер не проходят (две проверки подряд).
+  /// С признаками блокировки файрволом хватает и одной неудачной проверки.
+  bool get linkDown => isConnected && (_linkFails >= 2 || (_linkFails >= 1 && _firewallHits >= 3));
+
+  @visibleForTesting
+  set linkFailsForTest(int value) => _linkFails = value;
+
+  void _startLinkCheck() {
+    _linkTimer?.cancel();
+    _linkFails = 0;
+    exitCountry = null;
+    _linkTimer = Timer(const Duration(seconds: 1), _checkLink);
+  }
+
+  void _stopLinkCheck() {
+    _linkTimer?.cancel();
+    _linkTimer = null;
+    _checkPort = null;
+    _linkFails = 0;
+    exitCountry = null;
+    _firewallCore = null;
+    _firewallHits = 0;
+  }
+
+  Future<void> _checkLink() async {
+    final port = _checkPort;
+    if (port == null || status != ConnStatus.connected) return;
+    String? country;
+    var ok = true;
+    try {
+      country = await Net.exitCountry(XrayConfig.checkHost, port);
+    } catch (_) {
+      ok = false;
+    }
+    // Пока шёл запрос, подключение могло смениться — его результат уже не про текущее.
+    if (port != _checkPort || status != ConnStatus.connected) return;
+    final wasDown = linkDown;
+    if (ok) {
+      _linkFails = 0;
+      if (country != null) exitCountry = country;
+      if (wasDown) log.add('app', 'Связь через VPN восстановилась');
+    } else {
+      _linkFails++;
+      if (!wasDown && linkDown) log.add('app', 'Ошибка: VPN подключён, но связи через сервер нет');
+    }
+    notifyListeners();
+    // После неудачи перепроверяем быстрее: и чтобы не тревожить зря, и чтобы скорее снять тревогу.
+    _linkTimer?.cancel();
+    _linkTimer = Timer(Duration(seconds: ok ? 30 : 3), _checkLink);
+  }
 
   ConnStatus status = ConnStatus.disconnected;
 
@@ -99,6 +259,23 @@ class AppState extends ChangeNotifier {
   final isAdmin = WinSys.isAdmin();
 
   Timer? _statsTimer;
+
+  /// Запрос счётчиков трафика у ядер текущего подключения.
+  Future<void> Function({bool xray})? _pollStats;
+
+  /// Окно на экране (не свёрнуто и не спрятано в трей). Пока его не видно, счётчики трафика
+  /// у ядра Xray не запрашиваются.
+  bool get windowVisible => _windowVisible;
+  bool _windowVisible = true;
+
+  set windowVisible(bool value) {
+    if (_windowVisible == value) return;
+    _windowVisible = value;
+    // Окно открыли — цифры обновляются сразу, а не через секунду.
+    if (value && status == ConnStatus.connected) {
+      unawaited(_pollStats?.call().then((_) => notifyListeners()));
+    }
+  }
   Timer? _subsTimer;
   Timer? _saveTimer;
   final _crashTimes = <DateTime>[];
@@ -124,7 +301,12 @@ class AppState extends ChangeNotifier {
 
   Future<void> init(List<String> args) async {
     unawaited(log.open(AppPaths.logDir));
+    KillSwitch.onLog = (text) => log.add('app', text);
     await load();
+    if (protectedUnreadable) {
+      lastError = 'Сохранённые подписки зашифрованы для другой учётной записи Windows и не читаются. '
+          'Добавьте подписки заново или загрузите файл экспорта: Настройки → О приложении → Импорт.';
+    }
     // Окно должно узнать о данных сразу, даже если дальше что-то пойдёт не так.
     notifyListeners();
 
@@ -201,17 +383,7 @@ class AppState extends ChangeNotifier {
       }
       if (text.isNotEmpty) try {
         final j = jsonDecode(text) as Map<String, dynamic>;
-        settings = AppSettings.fromJson(j['settings'] as Map<String, dynamic>? ?? const {});
-        subscriptions.addAll(((j['subscriptions'] as List?) ?? const [])
-            .whereType<Map<String, dynamic>>()
-            .map(Subscription.fromJson));
-        servers.addAll(((j['servers'] as List?) ?? const [])
-            .whereType<Map<String, dynamic>>()
-            .map(ServerProfile.fromJson));
-        routingProfiles.addAll(((j['routing'] as List?) ?? const [])
-            .whereType<Map<String, dynamic>>()
-            .map(RoutingProfile.fromJson));
-        appRules = AppRules.fromJson(j['apps'] as Map<String, dynamic>? ?? const {});
+        _applyData(j, secret: await _readSecret(j, file));
       } catch (e) {
         // Файл повреждён: откладываем копию и продолжаем с чистого листа.
         log.add('app', 'Не удалось разобрать файл данных, копия сохранена как state.json.broken: $e');
@@ -229,6 +401,155 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// Раскладывает прочитанные данные по спискам. Подписки и серверы берутся из [secret]:
+  /// в файле они зашифрованы, в старом файле и в файле экспорта лежат открыто рядом с настройками.
+  void _applyData(Map<String, dynamic> j, {required Map<String, dynamic> secret}) {
+    settings = AppSettings.fromJson(j['settings'] as Map<String, dynamic>? ?? const {});
+    subscriptions.addAll(((secret['subscriptions'] as List?) ?? const [])
+        .whereType<Map<String, dynamic>>()
+        .map(Subscription.fromJson));
+    servers.addAll(
+        ((secret['servers'] as List?) ?? const []).whereType<Map<String, dynamic>>().map(ServerProfile.fromJson));
+    routingProfiles.addAll(
+        ((j['routing'] as List?) ?? const []).whereType<Map<String, dynamic>>().map(RoutingProfile.fromJson));
+    appRules = AppRules.fromJson(j['apps'] as Map<String, dynamic>? ?? const {});
+  }
+
+  /// Подписки и серверы хранятся зашифрованными ключом учётной записи Windows (поле `protected`):
+  /// файл, скопированный на другой компьютер или открытый другим пользователем, их не выдаст.
+  /// Старый файл без шифрования читается как есть и шифруется при первом сохранении.
+  Future<Map<String, dynamic>> _readSecret(Map<String, dynamic> j, File file) async {
+    final blob = j['protected'];
+    if (blob is! String) return j;
+    final plain = WinSys.unprotect(base64Decode(blob));
+    if (plain != null) return jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
+    // Чужой ключ: файл принесли с другого компьютера или из-под другой учётной записи.
+    // Зашифрованную часть откладываем — вдруг её ещё откроют там, где она была создана.
+    protectedUnreadable = true;
+    log.add('app', 'Ошибка: подписки в файле данных зашифрованы для другой учётной записи Windows и не читаются. '
+        'Копия сохранена как state.json.locked');
+    try {
+      final locked = File('${file.path}.locked');
+      if (!locked.existsSync()) await file.copy(locked.path);
+    } catch (_) {}
+    return const {};
+  }
+
+  /// Конфиг ядра на диск не пишется: в нём адреса и ключи серверов. Исключение — тестовая копия
+  /// разработчика: ей файл нужен для разбора неполадок. Файл, оставшийся от прежних версий, удаляется.
+  static Future<void> _debugCopy(String path, String text) async {
+    try {
+      final file = File(path);
+      if (AppPaths.isDev) {
+        await file.writeAsString(text);
+      } else if (file.existsSync()) {
+        await file.delete();
+      }
+    } catch (_) {}
+  }
+
+  /// Подписки из файла данных прочитать не удалось: они зашифрованы не для этой учётной записи.
+  /// Окно предлагает импортировать файл экспорта.
+  bool protectedUnreadable = false;
+
+  /// Что записывается в файл данных. [encrypt] false — всё открытым текстом (файл экспорта).
+  Map<String, dynamic> _dataForFile({required bool encrypt}) {
+    final secret = {
+      'subscriptions': subscriptions.map((e) => e.toJson()).toList(),
+      'servers': servers.map((e) => e.toJson()).toList(),
+    };
+    final blob = encrypt ? WinSys.protect(utf8.encode(jsonEncode(secret))) : null;
+    return {
+      'settings': settings.toJson(),
+      // Зашифровать не удалось — пишем открыто: потерять подписки хуже, чем хранить их как раньше.
+      if (blob != null) 'protected': base64Encode(blob) else ...secret,
+      'routing': routingProfiles.map((e) => e.toJson()).toList(),
+      'apps': appRules.toJson(),
+    };
+  }
+
+  /// Сохраняет все настройки, подписки и серверы в файл в папке [dir] — открытым текстом, чтобы его
+  /// можно было перенести на другой компьютер. Возвращает путь к файлу.
+  Future<String> exportData(String dir) async {
+    final now = DateTime.now();
+    String two(int n) => n.toString().padLeft(2, '0');
+    final path = '$dir\\${AppPaths.appName} — настройки ${now.year}-${two(now.month)}-${two(now.day)}.json';
+    final data = _dataForFile(encrypt: false);
+    // Состояние текущего подключения в перенос не идёт.
+    (data['settings'] as Map<String, dynamic>)
+      ..['systemProxyActive'] = false
+      ..remove('previousProxy')
+      ..remove('lastXrayPid')
+      ..remove('lastSingboxPid');
+    await File(path).writeAsString(const JsonEncoder.withIndent('  ').convert({'skipitExport': 1, ...data}), flush: true);
+    log.add('app', 'Настройки сохранены в файл экспорта');
+    return path;
+  }
+
+  /// Заменяет настройки, подписки и серверы содержимым файла экспорта (или старого state.json).
+  /// Возвращает текст ошибки или null, если всё получилось.
+  Future<String?> importData(String path) async {
+    if (status != ConnStatus.disconnected) return 'Сначала отключите VPN';
+    final Map<String, dynamic> j;
+    try {
+      j = jsonDecode(await File(path).readAsString()) as Map<String, dynamic>;
+    } catch (_) {
+      return 'Это не файл настроек SkipIt';
+    }
+    if (j['settings'] is! Map || (j['subscriptions'] is! List && j['protected'] is! String)) {
+      return 'Это не файл настроек SkipIt';
+    }
+    final Map<String, dynamic> secret;
+    if (j['protected'] is String) {
+      final plain = WinSys.unprotect(base64Decode(j['protected'] as String));
+      if (plain == null) {
+        return 'Файл зашифрован для другой учётной записи Windows. Нужен файл, сохранённый кнопкой «Экспорт»';
+      }
+      secret = jsonDecode(utf8.decode(plain)) as Map<String, dynamic>;
+    } else {
+      secret = j;
+    }
+    // Прежние данные держим до конца разбора: если файл окажется повреждённым, всё вернётся как было.
+    final before = (settings, List.of(subscriptions), List.of(servers), List.of(routingProfiles), appRules);
+    subscriptions.clear();
+    servers.clear();
+    routingProfiles.clear();
+    try {
+      _applyData(j, secret: secret);
+    } catch (_) {
+      settings = before.$1;
+      subscriptions
+        ..clear()
+        ..addAll(before.$2);
+      servers
+        ..clear()
+        ..addAll(before.$3);
+      routingProfiles
+        ..clear()
+        ..addAll(before.$4);
+      appRules = before.$5;
+      return 'Файл настроек повреждён';
+    }
+    // Состояние системы — от этого компьютера, а не из файла.
+    settings
+      ..systemProxyActive = before.$1.systemProxyActive
+      ..previousProxy = before.$1.previousProxy
+      ..lastXrayPid = null
+      ..lastSingboxPid = null;
+    if (!routingProfiles.any((r) => r.id == RoutingProfile.globalPresetId)) {
+      routingProfiles.insert(0, RoutingProfile.global());
+    }
+    if (!routingProfiles.any((r) => r.id == settings.selectedRoutingId)) {
+      settings.selectedRoutingId = RoutingProfile.globalPresetId;
+    }
+    protectedUnreadable = false;
+    _stateUnreadable = false;
+    log.add('app', 'Настройки загружены из файла: подписок — ${subscriptions.length}, серверов — ${servers.length}');
+    await saveNow();
+    notifyListeners();
+    return null;
+  }
+
   @visibleForTesting
   Future<void> loadForTest() => _load();
 
@@ -239,14 +560,8 @@ class AppState extends ChangeNotifier {
 
   Future<void> saveNow() async {
     _saveTimer?.cancel();
-    final data = {
-      'settings': settings.toJson(),
-      'subscriptions': subscriptions.map((e) => e.toJson()).toList(),
-      'servers': servers.map((e) => e.toJson()).toList(),
-      'routing': routingProfiles.map((e) => e.toJson()).toList(),
-      'apps': appRules.toJson(),
-    };
     if (_stateUnreadable) return;
+    final data = _dataForFile(encrypt: true);
     final text = const JsonEncoder.withIndent('  ').convert(data);
     // Пишем во временный файл и подменяем; если файл занят — несколько попыток, потом прямая запись.
     for (var attempt = 1; attempt <= 10; attempt++) {
@@ -302,7 +617,8 @@ class AppState extends ChangeNotifier {
     log.close();
   }
 
-  void toast(String msg) => _messages.add(msg);
+  /// Всплывающее сообщение внизу окна. [kind] не задан — определяется по тексту (см. [ToastMessage.kindOf]).
+  void toast(String msg, {ToastKind? kind}) => _messages.add(ToastMessage(msg, kind ?? ToastMessage.kindOf(msg)));
 
   // ---------------------------------------------------------------------------
   // Выборки
@@ -428,7 +744,9 @@ class AppState extends ChangeNotifier {
       if (!force && failed != null && DateTime.now().isBefore(failed)) continue;
       await updateSubscription(s, silent: true);
       if (s.error != null) {
-        _subRetryAfter[s.id] = DateTime.now().add(const Duration(minutes: 5));
+        // Сервер отказал по существу (подписка закончилась, ссылка не действует) — частые повторы
+        // ничего не изменят, пробуем раз в час.
+        _subRetryAfter[s.id] = DateTime.now().add(Duration(minutes: _subsRefused.contains(s.id) ? 60 : 5));
       } else {
         _subRetryAfter.remove(s.id);
         if (!force) log.add('subscription', '«${s.displayName}» обновлена автоматически');
@@ -437,6 +755,9 @@ class AppState extends ChangeNotifier {
   }
 
   final _subRetryAfter = <String, DateTime>{};
+
+  /// Подписки, на последний запрос которых сервер ответил отказом.
+  final _subsRefused = <String>{};
 
   /// Загрузка подписки с общим ограничением по времени: зависший запрос не должен навсегда
   /// блокировать следующие обновления. Если через VPN не получилось — пробуем напрямую.
@@ -456,6 +777,8 @@ class AppState extends ChangeNotifier {
       try {
         return await Net.fetchSubscription(sub.url, settings, proxyPort: viaProxy).timeout(limit);
       } catch (e) {
+        // Сервер ответил отказом — запрос дошёл, идти другим путём незачем.
+        if (e is ServerRefused && e.isFinal) rethrow;
         log.add('subscription', '${sub.displayName}: через VPN не удалось (${scrubUrls('$e')}), пробую напрямую');
       }
       final fetched = await direct();
@@ -487,6 +810,7 @@ class AppState extends ChangeNotifier {
       sub.applyMeta(fetched.meta);
       sub.lastUpdated = DateTime.now();
       sub.error = null;
+      _subsRefused.remove(sub.id);
 
       final old = {for (final s in serversOf(sub.id)) s.link: s};
       // Если формат сменился (ссылки → JSON), ссылки не совпадут — узнаём сервер по названию,
@@ -528,8 +852,11 @@ class AppState extends ChangeNotifier {
       if (!silent) toast('Подписка «${sub.displayName}» обновлена — серверов: ${fresh.length}');
     } catch (e) {
       sub.error = describeNetError(e);
+      final refused = e is ServerRefused && e.isFinal;
+      refused ? _subsRefused.add(sub.id) : _subsRefused.remove(sub.id);
       // Адрес подписки — ключ доступа: в журнал он не пишется, даже если попал в текст ошибки.
-      log.add('subscription', '${sub.displayName}: ${scrubUrls('$e')}');
+      log.add('subscription',
+          '${sub.displayName}: не удалось обновить подписку — ${e is ServerRefused ? e.reason : scrubUrls('$e')}');
       if (!silent) toast('Не удалось обновить «${sub.displayName}»: ${sub.error}');
     } finally {
       updatingSubs.remove(sub.id);
@@ -655,6 +982,9 @@ class AppState extends ChangeNotifier {
 
   /// Kill Switch держит интернет закрытым, а VPN не подключён: ядро упало и не поднялось,
   /// или переподключение не удалось. Окно показывает это и предлагает открыть интернет.
+  /// Kill Switch сейчас стоит (отметка на главной).
+  bool get killSwitchOn => KillSwitch.active;
+
   bool get killSwitchHolding => KillSwitch.active && status == ConnStatus.disconnected;
 
   /// Включение и выключение Kill Switch в настройках действует сразу, без переподключения.
@@ -668,7 +998,7 @@ class AppState extends ChangeNotifier {
         await KillSwitch.engage();
       } catch (e) {
         settings.killSwitch = false;
-        toast('$e');
+        toast('$e', kind: ToastKind.error);
       }
     }
     changed();
@@ -677,7 +1007,7 @@ class AppState extends ChangeNotifier {
   /// Пользователь решил открыть интернет без VPN (кнопка на главной).
   Future<void> releaseKillSwitch() async {
     await KillSwitch.release();
-    log.add('app', 'Kill Switch снят: интернет открыт без VPN');
+    log.add('app', 'Интернет открыт без VPN');
     notifyListeners();
   }
 
@@ -776,6 +1106,12 @@ class AppState extends ChangeNotifier {
     log.startSession(selectedServer?.name ?? 'Сервер не выбран', detail: xrayTun ? '${settings.mode.label} · Xray' : settings.mode.label);
     log.add('app', 'Подключение…');
     try {
+      // С запущенным zapret не подключаемся вовсе: он правит пакеты, в том числе на пути к VPN-серверу.
+      final zapret = WinSys.zapretRunning();
+      if (zapret != null) {
+        throw CoreException('Запущен $zapret — с ним VPN не подключается: он вмешивается в соединения, '
+            'в том числе с VPN-сервером. Закройте $zapret и подключитесь снова.');
+      }
       if (usesTun && !isAdmin) throw NeedAdminException();
 
       // Два VPN с TUN одновременно дерутся за маршруты — сеть ломается до перезагрузки.
@@ -846,6 +1182,14 @@ class AppState extends ChangeNotifier {
           if (directSubscriptionHost(s.url) != null) directSubscriptionHost(s.url)!,
       ]);
       _directPort = directPort;
+      // Вход проверки связи: через него программа сама убеждается, что VPN-сервер отвечает.
+      taken.add(directPort);
+      var checkPort = directPort + 1;
+      while (taken.contains(checkPort) || !await _portFree(checkPort)) {
+        if (++checkPort > directPort + 200) throw CoreException('Не нашлось свободного порта для проверки связи');
+      }
+      taken.add(checkPort);
+      XrayConfig.addCheckInbound(config, port: checkPort);
       // С Kill Switch имя VPN-сервера ядро узнаёт само: запрос Windows к DNS обычной сети был бы
       // заблокирован, и подключение «висело» бы секунд двенадцать.
       if (usesTun && settings.killSwitch) XrayConfig.resolveServersInside(config, settings: session);
@@ -863,7 +1207,12 @@ class AppState extends ChangeNotifier {
                     _ => ConnRoute.proxy,
                   }),
         ]);
-      await File(AppPaths.configFile).writeAsString(const JsonEncoder.withIndent('  ').convert(config));
+      final statsSkip = XrayConfig.chainedOutbounds(config);
+      int? tunStatsPort;
+      var tunStatsSecret = '';
+      // Конфиг с адресами и ключами серверов ядро получает напрямую, а не из файла на диске.
+      final configText = const JsonEncoder.withIndent('  ').convert(config);
+      await _debugCopy(AppPaths.configFile, configText);
       _checkCancel();
       // Kill Switch ставится до запуска ядер: с этой минуты мимо VPN ничего не выходит.
       if (usesTun && settings.killSwitch) {
@@ -871,8 +1220,8 @@ class AppState extends ChangeNotifier {
       } else {
         await KillSwitch.release();
       }
-      await _xray.start(AppPaths.xrayExe, ['run', '-c', AppPaths.configFile],
-          env: {'XRAY_LOCATION_ASSET': AppPaths.geoDir.path});
+      await _xray.start(AppPaths.xrayExe, ['run', '-c', 'stdin:'],
+          env: {'XRAY_LOCATION_ASSET': AppPaths.geoDir.path}, input: configText);
       settings.lastXrayPid = _xray.pid;
       await saveNow();
 
@@ -902,11 +1251,26 @@ class AppState extends ChangeNotifier {
         ];
         _appliedAppRules = appRules.signature;
         await _tunCleanup;
-        final tun = SingboxConfig.build(settings: session, routing: routing, apps: appRules, serverDomains: domains);
-        await File(AppPaths.tunConfigFile).writeAsString(const JsonEncoder.withIndent('  ').convert(tun));
+        // Порт списка соединений sing-box — для счётчика трафика, который он выпускает напрямую сам.
+        var port = checkPort + 1;
+        while (taken.contains(port) || !await _portFree(port)) {
+          if (++port > checkPort + 200) throw CoreException('Не нашлось свободного порта для счётчика трафика');
+        }
+        final random = Random.secure();
+        tunStatsPort = port;
+        tunStatsSecret = [for (var i = 0; i < 16; i++) random.nextInt(256).toRadixString(16).padLeft(2, '0')].join();
+        final tun = SingboxConfig.build(
+            settings: session,
+            routing: routing,
+            apps: appRules,
+            serverDomains: domains,
+            statsPort: tunStatsPort,
+            statsSecret: tunStatsSecret);
+        final tunText = const JsonEncoder.withIndent('  ').convert(tun);
+        await _debugCopy(AppPaths.tunConfigFile, tunText);
         final logStart = log.lines.length;
         _checkCancel();
-        await _singbox.start(AppPaths.singboxExe, ['run', '-c', AppPaths.tunConfigFile]);
+        await _singbox.start(AppPaths.singboxExe, ['run', '-c', 'stdin'], input: tunText);
         settings.lastSingboxPid = _singbox.pid;
         // «Подключено» сообщаем, только когда трафик действительно пошёл через наш адаптер. Обычно это
         // доли секунды. Если Windows не может включить адаптер, sing-box через 10 секунд пишет об этом
@@ -935,11 +1299,19 @@ class AppState extends ChangeNotifier {
       status = ConnStatus.connected;
       connectedAt = DateTime.now();
       log.add('app', 'Подключено');
+      WinSys.flushDnsCache();
       stats.reset();
       _statsTimer?.cancel();
+      _checkPort = checkPort;
+      _startLinkCheck();
+      _pollStats = ({bool xray = true}) => stats.poll(session.apiPort, _routes,
+          skip: statsSkip, tunPort: tunStatsPort, tunSecret: tunStatsSecret, xray: xray);
       _statsTimer = Timer.periodic(const Duration(seconds: 1), (_) async {
-        await stats.poll(session.apiPort);
-        notifyListeners();
+        // Окно спрятано — цифры никто не видит: ядро Xray не опрашивается, главная не перерисовывается.
+        final visible = windowVisible;
+        if (!visible && tunStatsPort == null) return;
+        await _pollStats?.call(xray: visible);
+        if (visible) notifyListeners();
       });
       notifyListeners();
     } catch (e) {
@@ -1009,9 +1381,16 @@ class AppState extends ChangeNotifier {
     if (status == ConnStatus.connecting) return cancelConnect();
     status = ConnStatus.disconnecting;
     notifyListeners();
+    // Последний замер, пока ядра ещё работают: итог сеанса остаётся в журнале.
+    _statsTimer?.cancel();
+    if (_xray.running) await _pollStats?.call();
+    final summary = trafficSummary(stats);
     await _teardown();
     if (!hold) await KillSwitch.release();
+    await KillSwitch.verifyReleased();
+    WinSys.flushDnsCache();
     log.add('app', 'Отключено');
+    if (summary != null) log.add('app', summary);
     if (KillSwitch.active) log.add('app', 'Kill Switch держит интернет закрытым');
     log.endSession();
     if (!keepError) lastError = null;
@@ -1020,9 +1399,19 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Строка журнала с трафиком за подключение; null — трафика не было.
+  static String? trafficSummary(TrafficStats s) {
+    if (s.up + s.down == 0) return null;
+    String part(int down, int up) => '${formatBytes(down)} получено, ${formatBytes(up)} отправлено';
+    return 'Трафик за подключение — через VPN: ${part(s.vpnDown, s.vpnUp)}; '
+        'напрямую: ${part(s.directDown, s.directUp)}';
+  }
+
   Future<void> _teardown() async {
     _statsTimer?.cancel();
     _statsTimer = null;
+    _pollStats = null;
+    _stopLinkCheck();
     if (settings.systemProxyActive) {
       await WinSys.restoreProxy(settings.previousProxy);
       settings.systemProxyActive = false;

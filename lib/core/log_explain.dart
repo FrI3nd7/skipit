@@ -24,6 +24,12 @@ class LogExplain {
       RegExp(r'open interface take too much time|configure tun interface'),
       (_) => 'Windows не отдаёт сетевой адаптер VPN. Обычно помогает перезагрузка; пока можно подключиться в режиме «Прокси».'
     ),
+    // Стоит раньше общего «Access is denied»: здесь отказ — про чужой процесс, а не про права программы.
+    (
+      RegExp(r'Unables to find local process name|failed to search process'),
+      (_) => 'Ядро не смогло узнать, какая программа открыла соединение: Windows не дала доступа к её процессу '
+          'или соединение уже закрылось. Правило по приложениям к нему не применилось — оно пошло общим путём.'
+    ),
     (RegExp(r'[Aa]ccess is denied'), (_) => 'Windows отказала в доступе — нужны права администратора.'),
 
     // Файрвол.
@@ -32,7 +38,121 @@ class LogExplain {
       (_) => 'Выход в сеть заблокирован файрволом (например, simplewall). Разрешите в нём ядро SkipIt.'
     ),
 
+    // Обычная работа ядра Xray (строки уровней info и debug): что оно делает с каждым соединением.
+    (
+      RegExp(r'proxy: (XtlsPadding|Xtls Unpadding|XtlsFilterTls|ReshapeMultiBuffer|CopyRawConn)'),
+      (_) => 'Служебная строка: ядро упаковывает и шифрует данные для VPN-сервера. Видна только на уровне '
+          'журнала debug, на работу не влияет.'
+    ),
+    (
+      RegExp(r'proxy/dns: rejected type Type(\w+) query for domain'),
+      (m) => m.group(1) == 'PTR'
+          ? 'Программа спросила, какое имя у адреса (обратный запрос). VPN на такие запросы не отвечает — '
+              'это нормально, сайтам не мешает.'
+          : 'Программа запросила у DNS служебную запись (${m.group(1)}), а не адрес сайта. VPN на такие запросы '
+              'не отвечает — это нормально.'
+    ),
+    (
+      RegExp(r'app/dns: domain (\S+?)\.? will use DNS in order'),
+      (m) => 'Ядро выбирает, у какого DNS-сервера спросить адрес ${m.group(1)}.'
+    ),
+    (
+      RegExp(r'app/dns: \S+ cache (?:HIT|OPTIMISTE) (\S+?)\.? ->'),
+      (m) => 'Адрес ${m.group(1)} взят из памяти ядра, без нового запроса.'
+    ),
+    (RegExp(r'app/dns: \S+ querying: (\S+?)\.?$'), (m) => 'Ядро спрашивает у DNS-сервера адрес ${m.group(1)}.'),
+    (
+      RegExp(r'app/dns: \S+ got answer: (\S+?)\.? .*rtt: ([\d.]+)ms'),
+      (m) => 'DNS-сервер ответил, где находится ${m.group(1)} (за ${double.parse(m.group(2)!).round()} мс).'
+    ),
+    (
+      RegExp(r'app/dispatcher: taking detour \[(.+?)\] for \[(.+?)\]'),
+      (m) => 'Для соединения с ${_bare(m.group(2)!)} ядро выбрало путь «${m.group(1)}».'
+    ),
+    (
+      RegExp(r'app/dispatcher: default route for (\S+)'),
+      (m) => 'Для соединения с ${_bare(m.group(1)!)} особых правил нет — оно идёт путём по умолчанию.'
+    ),
+    (
+      RegExp(r'tunneling request to (\S+) via'),
+      (m) => 'Соединение с ${_bare(m.group(1)!)} отправлено через VPN-сервер.'
+    ),
+    (
+      RegExp(r'proxy/freedom: (?:dialing|opening connection|connection opened) to (\S+)'),
+      (m) => 'Соединение с ${_bare(m.group(1)!)} идёт напрямую, мимо VPN.'
+    ),
+    (
+      RegExp(r'proxy/http: request to Method \[\w+\] Host \[(.+?)\]'),
+      (m) => 'Программа обратилась к ${m.group(1)} через системный прокси.'
+    ),
+    (
+      RegExp(r'app/router: least load: no qualified outbound|fallback to \[.+?\], due to empty tag'),
+      (_) => 'Автовыбор сервера ещё не набрал замеров и пока использует сервер по умолчанию.'
+    ),
+    (
+      RegExp(r'observatory/burst: perform one-time health check'),
+      (_) => 'Ядро проверяет серверы провайдера, чтобы выбрать лучший.'
+    ),
+    (
+      RegExp(r'API server listening'),
+      (_) => 'Открыт служебный вход ядра для счётчиков трафика — только для этого компьютера.'
+    ),
+
+    // Обычная работа sing-box (уровни info и debug).
+    (RegExp(r'inbound/tun\[.*?\]: started at'), (_) => 'Адаптер VPN создан и работает.'),
+    (
+      RegExp(r'network: updated default interface (.+?), index'),
+      (m) => 'sing-box определил, через какую сетевую карту выходить в интернет: ${m.group(1)}.'
+    ),
+    (
+      RegExp(r'clash-api: restful api listening'),
+      (_) => 'Открыт служебный вход sing-box для счётчика трафика — только для этого компьютера.'
+    ),
+    (
+      RegExp(r'router: found process path: (.+)$'),
+      (m) => 'Соединение открыла программа ${m.group(1)!.trim().split(r'\').last}.'
+    ),
+    (
+      RegExp(r'inbound/tun\[.*?\]: inbound DNS packet'),
+      (_) => 'Программа спрашивает адрес сайта — запрос попал в адаптер VPN.'
+    ),
+    (
+      RegExp(r'inbound/tun\[.*?\]: inbound (?:packet )?connection to (\S+)'),
+      (m) => 'Программа на компьютере соединяется с ${m.group(1)} — трафик попал в адаптер VPN.'
+    ),
+    (
+      RegExp(r'outbound/socks\[proxy\]: outbound (?:packet )?connection to (\S+)'),
+      (m) => 'Соединение с ${m.group(1)} передано ядру Xray — дальше оно идёт по правилам маршрутизации.'
+    ),
+    (
+      RegExp(r'outbound/direct\[direct\]: outbound (?:packet )?connection to (\S+)'),
+      (m) => 'Соединение с ${m.group(1)} идёт напрямую, мимо VPN.'
+    ),
+    (
+      RegExp(r'router: sniffed (?:packet )?protocol: (\w+)(?:, domain: (\S+))?'),
+      (m) => m.group(2) == null
+          ? 'Ядро определило вид соединения: ${m.group(1)}.'
+          : 'Ядро определило, к какому сайту идёт соединение: ${m.group(2)}.'
+    ),
+    (
+      RegExp(r'router: match\[\d+\].*=> route\((\w+)\)'),
+      (m) => m.group(1) == 'direct'
+          ? 'Сработало правило: соединение идёт напрямую, мимо VPN.'
+          : 'Сработало правило: соединение идёт через VPN.'
+    ),
+    (RegExp(r'dns: exchanged (\S+?)\.? NOERROR'), (m) => 'DNS ответил на запрос об адресе ${m.group(1)}.'),
+    (
+      RegExp(r'dns: exchanged (\S+?)\.? (NXDOMAIN|SERVFAIL)'),
+      (m) => 'DNS ответил, что имени ${m.group(1)} не существует или узнать его не удалось.'
+    ),
+    (
+      RegExp(r'connection: connection (?:upload|download) (?:finished|closed)'),
+      (_) => 'Соединение завершено.'
+    ),
   ];
+
+  /// Адрес без приставки сети: `tcp:example.com:443` → `example.com:443`.
+  static String _bare(String address) => address.replaceFirst(RegExp(r'^(tcp|udp):'), '');
 
   /// Пояснения к сбоям: показываются только у предупреждений и ошибок — иначе обычная строка,
   /// где просто упомянут сертификат или REALITY, выглядела бы как поломка.

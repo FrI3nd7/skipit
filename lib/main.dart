@@ -281,6 +281,8 @@ class _SkipItAppState extends State<SkipItApp> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    if (lifecycle != null) didChangeAppLifecycleState(lifecycle);
     widget.state.addListener(_syncTheme);
     // При закрытии окна обязательно гасим ядро и возвращаем системный прокси.
     _lifecycle = AppLifecycleListener(onExitRequested: () async {
@@ -291,6 +293,12 @@ class _SkipItAppState extends State<SkipItApp> with WidgetsBindingObserver {
 
   @override
   void didChangePlatformBrightness() => _syncTheme();
+
+  /// Окно свернули или спрятали в трей — Windows сообщает состояние «hidden».
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    widget.state.windowVisible = state == AppLifecycleState.resumed || state == AppLifecycleState.inactive;
+  }
 
   @override
   void dispose() {

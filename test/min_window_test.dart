@@ -4,8 +4,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:skipit/core/link_parser.dart';
+import 'package:skipit/core/log_store.dart';
 import 'package:skipit/core/paths.dart';
+import 'package:skipit/core/util.dart';
 import 'package:skipit/models/routing.dart';
+import 'package:skipit/models/settings.dart';
 import 'package:skipit/models/subscription.dart';
 import 'package:skipit/state/app_scope.dart';
 import 'package:skipit/state/app_state.dart';
@@ -90,4 +93,130 @@ void main() {
       }
     });
   }
+
+  testWidgets('наименьшее окно, главная при подключении: счётчики VPN и «напрямую»', (tester) async {
+    C.use(Palette.dark);
+    tester.view.physicalSize = minClient;
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final state = AppState()
+      ..settings.mode = ConnectionMode.mixed
+      ..status = ConnStatus.connected
+      ..connectedAt = DateTime.now().subtract(const Duration(hours: 3, minutes: 12));
+    state.routingProfiles.addAll([RoutingProfile.global(), ...RoutingProfile.templates()]);
+    state.stats
+      ..upSpeed = 1023 * 1024
+      ..downSpeed = 118 * 1024 * 1024
+      ..vpnUp = 745 * 1024 * 1024
+      ..directUp = 1012 * 1024
+      ..vpnDown = 990 * 1024 * 1024 * 1024
+      ..directDown = 812 * 1024 * 1024;
+
+    await tester.pumpWidget(AppScope(
+      state: state,
+      child: MaterialApp(theme: buildTheme(), home: const RepaintBoundary(child: Shell())),
+    ));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    expect(find.text('VPN'), findsNWidgets(2));
+    expect(find.text('Напрямую'), findsNWidgets(2));
+    expect(find.text(formatBytes(state.stats.directDown)), findsOneWidget);
+
+    // Страна выхода появляется под временем, когда проверка связи её узнала.
+    expect(find.text('ЗАЩИЩЕНО'), findsOneWidget);
+    expect(find.text('Финляндия'), findsNothing);
+    state
+      ..exitCountry = 'fi'
+      ..notifyListeners();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Финляндия'), findsOneWidget);
+
+    const shots = String.fromEnvironment('SKIPIT_SHOTS');
+    Future<void> shot(String name) async {
+      if (shots.isEmpty) return;
+      await expectLater(find.byType(RepaintBoundary).first, matchesGoldenFile(Uri.file('$shots\\$name.png')));
+    }
+
+    await shot('connected_home');
+
+    // Сервер перестал отвечать: вместо «Защищено» — «Нет связи» и карточка с кнопкой.
+    state
+      ..linkFailsForTest = 2
+      ..notifyListeners();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('НЕТ СВЯЗИ'), findsOneWidget);
+    expect(find.text('ЗАЩИЩЕНО'), findsNothing);
+    expect(find.text('VPN подключён, но связи нет'), findsOneWidget);
+    expect(find.text('Переподключиться'), findsOneWidget);
+    await shot('connected_home_no_link');
+
+    state
+      ..linkFailsForTest = 0
+      ..notifyListeners();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('VPN подключён, но связи нет'), findsNothing);
+  });
+
+  testWidgets('наименьшее окно, вкладка «Соединения»: счёт за весь отрезок и фильтр по пути', (tester) async {
+    C.use(Palette.dark);
+    tester.view.physicalSize = minClient;
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    final state = AppState();
+    state.routingProfiles.addAll([RoutingProfile.global(), ...RoutingProfile.templates()]);
+    state.log.startSession('Finland', detail: 'Смешанный · Xray');
+    const total = LogBuffer.maxConnections + 12345;
+    for (var i = 0; i < total; i++) {
+      final route = i % 50 == 0 ? ConnRoute.block : (i % 7 == 0 ? ConnRoute.direct : ConnRoute.proxy);
+      state.log.addConnection(ConnEntry(
+          network: 'tcp', host: 'rr$i---sn.googlevideo.com', port: 443, inbound: 'http', outbound: route.name, route: route));
+    }
+
+    await tester.pumpWidget(AppScope(
+      state: state,
+      child: MaterialApp(theme: buildTheme(), home: const RepaintBoundary(child: Shell())),
+    ));
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.byIcon(Icons.receipt_long_rounded).first);
+    await tester.pump(const Duration(milliseconds: 400));
+    // Пять обращений к одному сайту — в списке одна строка со счётчиком.
+    for (final out in ['proxy', 'proxy-2', 'proxy', 'proxy-2', 'proxy']) {
+      state.log.addConnection(ConnEntry(
+          network: 'tcp', host: 'same.example', port: 443, inbound: 'http', outbound: out, route: ConnRoute.proxy));
+    }
+    await tester.pump(const Duration(milliseconds: 400));
+    await tester.tap(find.text('Соединения  ${total + 5}'));
+    await tester.pump(const Duration(milliseconds: 400));
+
+    // По умолчанию — «Последняя минута»: числа на кнопках считаются по списку, пометки про 2000 нет.
+    expect(find.textContaining('в списке — последние'), findsNothing);
+    expect(find.textContaining('same.example:443 → через VPN'), findsOneWidget);
+    expect(find.text('×5'), findsOneWidget);
+    expect(find.textContaining('(proxy-2) · вход: HTTP-прокси'), findsNothing);
+    await tester.tap(find.textContaining('same.example:443'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.textContaining('(proxy-2) · вход: HTTP-прокси'), findsNWidgets(2));
+    if (const String.fromEnvironment('SKIPIT_SHOTS').isNotEmpty) {
+      await expectLater(find.byType(RepaintBoundary).first,
+          matchesGoldenFile(Uri.file('${const String.fromEnvironment('SKIPIT_SHOTS')}\\connections_recent.png')));
+    }
+
+    // «Всё подключение»: числа — за весь отрезок.
+    await tester.tap(find.text('Последняя минута'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('в списке — последние ${LogBuffer.maxConnections}'), findsOneWidget);
+    const shots = String.fromEnvironment('SKIPIT_SHOTS');
+    if (shots.isNotEmpty) {
+      await expectLater(find.byType(RepaintBoundary).first, matchesGoldenFile(Uri.file('$shots\\connections.png')));
+    }
+
+    // Фильтр «Напрямую»: в списке остаются только такие соединения.
+    await tester.tap(find.textContaining('Напрямую  '));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.textContaining('через VPN'), findsNothing);
+    expect(find.textContaining('напрямую'), findsWidgets);
+    state.log.endSession();
+  });
 }

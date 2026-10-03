@@ -226,9 +226,15 @@ void FlutterWindow::HandleKillSwitchCall(
                           nullptr);
       result->Error("wfp", message);
     }
-  } else if (method == "release") {
-    KillSwitchRelease();
-    result->Success();
+  } else if (method == "release" || method == "status") {
+    // Ответ — для журнала: стояли ли фильтры, что ответила Windows и сколько их осталось.
+    const bool engaged = KillSwitchEngaged();
+    const unsigned long code = method == "release" ? KillSwitchRelease() : 0;
+    result->Success(flutter::EncodableValue(flutter::EncodableMap{
+        {flutter::EncodableValue("engaged"), flutter::EncodableValue(engaged)},
+        {flutter::EncodableValue("code"), flutter::EncodableValue(static_cast<int64_t>(code))},
+        {flutter::EncodableValue("left"), flutter::EncodableValue(KillSwitchCountFilters())},
+    }));
   } else {
     result->NotImplemented();
   }

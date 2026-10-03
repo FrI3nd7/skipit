@@ -285,6 +285,20 @@ class XrayConfig {
     };
   }
 
+  /// Выходы, через которые ходят другие выходы (цепочка `dialerProxy` / `proxySettings` в конфиге
+  /// провайдера). В счётчике трафика они не учитываются: тот же трафик уже посчитан на основном выходе.
+  static Set<String> chainedOutbounds(Map<String, dynamic> cfg) {
+    final tags = <String>{};
+    for (final o in (cfg['outbounds'] as List? ?? const [])) {
+      if (o is! Map) continue;
+      final dialer = ((o['streamSettings'] as Map?)?['sockopt'] as Map?)?['dialerProxy'];
+      final chain = (o['proxySettings'] as Map?)?['tag'];
+      if (dialer is String && dialer.isNotEmpty) tags.add(dialer);
+      if (chain is String && chain.isNotEmpty) tags.add(chain);
+    }
+    return tags;
+  }
+
   static const tunTag = 'skipit-tun';
 
   /// Адреса TUN-адаптера (одни и те же с обоими ядрами). По ним же Kill Switch узнаёт соединения,
@@ -537,6 +551,57 @@ class XrayConfig {
       if (ips.isNotEmpty) {'inboundTag': inbound, 'ip': ips, 'outboundTag': direct},
       {'inboundTag': inbound, 'outboundTag': block},
       ...(routing['rules'] as List? ?? const []),
+    ];
+    cfg['routing'] = routing;
+  }
+
+  static const checkInTag = 'skipit-check-in';
+
+  /// Адрес, по которому программа проверяет связь через VPN и узнаёт страну выхода.
+  static const checkHost = 'www.cloudflare.com';
+
+  /// Локальный вход для проверки связи: запрос программы к [checkHost] всегда идёт через VPN-сервер,
+  /// какими бы ни были правила маршрутизации (обычный запрос мог бы уйти напрямую и ничего не сказал бы
+  /// о сервере). Всё, кроме этого адреса, вход блокирует.
+  static void addCheckInbound(Map<String, dynamic> cfg, {required int port}) {
+    const block = 'skipit-block';
+    cfg['inbounds'] = [
+      ...(cfg['inbounds'] as List? ?? const []),
+      {
+        'tag': checkInTag,
+        'protocol': 'http',
+        'listen': '127.0.0.1',
+        'port': port,
+        'settings': <String, dynamic>{},
+      },
+    ];
+    final outbounds = [...(cfg['outbounds'] as List)];
+    if (!outbounds.any((o) => o is Map && o['tag'] == block)) outbounds.add({'tag': block, 'protocol': 'blackhole'});
+    cfg['outbounds'] = outbounds;
+
+    final routing = (cfg['routing'] as Map?)?.cast<String, dynamic>() ?? <String, dynamic>{};
+    final rules = [...(routing['rules'] as List? ?? const [])];
+    // Куда идёт трафик «через VPN»: у провайдера с автовыбором сервера — в его балансировщик,
+    // иначе — в первый выход, который ведёт на VPN-сервер.
+    final balancer = rules.reversed
+        .whereType<Map>()
+        .where((r) => r['inboundTag'] == null && r['balancerTag'] is String)
+        .map((r) => r['balancerTag'] as String)
+        .firstOrNull;
+    final proxy = outbounds
+        .whereType<Map>()
+        .where((o) => !const ['freedom', 'blackhole', 'dns', 'loopback'].contains(o['protocol']))
+        .firstOrNull;
+    if (balancer == null && proxy == null) return;
+    const inbound = [checkInTag];
+    routing['rules'] = [
+      {
+        'inboundTag': inbound,
+        'domain': ['full:$checkHost'],
+        if (balancer != null) 'balancerTag': balancer else 'outboundTag': proxy!['tag'] ??= 'proxy',
+      },
+      {'inboundTag': inbound, 'outboundTag': block},
+      ...rules,
     ];
     cfg['routing'] = routing;
   }

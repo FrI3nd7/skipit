@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -69,6 +70,35 @@ String _span(Duration d) {
 class _LogsPageState extends State<LogsPage> {
   _LogTab _tab = _LogTab.all;
 
+  /// Фильтр вкладки «Соединения» по пути; null — все.
+  ConnRoute? _route;
+
+  /// В «Соединениях» показывать только то, к чему обращались за последнюю минуту.
+  bool _recent = true;
+
+  /// Фильтр строк журнала: 2 — только ошибки, 1 — только предупреждения, null — все.
+  int? _level;
+
+  /// Развёрнутые группы одинаковых соединений (см. [ConnGroup.key]).
+  final _open = <String>{};
+
+  /// Список «за последнюю минуту» должен редеть и тогда, когда новых соединений нет.
+  late final Timer _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (mounted && _tab == _LogTab.connections && _recent) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick.cancel();
+    super.dispose();
+  }
+
   /// Отрезок, выбранный пользователем. null — показываем самый свежий и следуем за новыми.
   String? _selectedId;
 
@@ -130,6 +160,14 @@ class _LogsPageState extends State<LogsPage> {
                             session: selected!,
                             tab: _tab,
                             onTab: (t) => setState(() => _tab = t),
+                            route: _route,
+                            onRoute: (r) => setState(() => _route = r),
+                            recent: _recent,
+                            onRecent: (v) => setState(() => _recent = v),
+                            level: _level,
+                            onLevel: (v) => setState(() => _level = v),
+                            open: _open,
+                            onToggle: (key) => setState(() => _open.remove(key) || _open.add(key)),
                             onCopied: () => state.toast('Журнал скопирован'),
                             onDelete: () {
                               setState(() => _selectedId = null);
@@ -449,12 +487,28 @@ class _SessionView extends StatelessWidget {
     required this.session,
     required this.tab,
     required this.onTab,
+    required this.route,
+    required this.onRoute,
+    required this.recent,
+    required this.onRecent,
+    required this.level,
+    required this.onLevel,
+    required this.open,
+    required this.onToggle,
     required this.onCopied,
     required this.onDelete,
   });
   final LogSession session;
   final _LogTab tab;
   final ValueChanged<_LogTab> onTab;
+  final ConnRoute? route;
+  final ValueChanged<ConnRoute?> onRoute;
+  final bool recent;
+  final ValueChanged<bool> onRecent;
+  final int? level;
+  final ValueChanged<int?> onLevel;
+  final Set<String> open;
+  final ValueChanged<String> onToggle;
   final VoidCallback onCopied;
   final VoidCallback onDelete;
 
@@ -462,8 +516,18 @@ class _SessionView extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = session;
     final all = s.lines;
-    final lines = (all ?? const <LogLine>[]).where((l) => tab.matches(l.source)).toList();
-    final conns = s.connections;
+    final tabLines = (all ?? const <LogLine>[]).where((l) => tab.matches(l.source)).toList();
+    final lines = level == null ? tabLines : tabLines.where((l) => l.level == level).toList();
+    final stored = s.connections;
+    // «Последняя минута» есть только у идущего подключения: в прошлом отрезке показывать было бы нечего.
+    final recentOnly = recent && s.live;
+    final since = DateTime.now().subtract(const Duration(minutes: 1));
+    final window = recentOnly ? stored.where((c) => c.time.isAfter(since)).toList() : stored;
+    final conns = route == null ? window : window.where((c) => c.route == route).toList();
+    // Числа на кнопках: за последнюю минуту — по тому, что в списке, иначе — за весь отрезок.
+    int count(ConnRoute? r) => recentOnly
+        ? (r == null ? window.length : window.where((c) => c.route == r).length)
+        : (r == null ? s.connectionsTotal : s.connectionCounts[r] ?? 0);
     final showConns = tab == _LogTab.connections;
     final when = '${_dayLabel(s.start)}, ${_clock(s.start)}'
         '${s.live ? ' · идёт сейчас' : ' – ${_clock(s.end)} · ${_span(s.end.difference(s.start))}'}'
@@ -519,13 +583,56 @@ class _SessionView extends StatelessWidget {
               value: tab,
               items: {
                 for (final t in _LogTab.values)
-                  t: '${t.label}  ${t == _LogTab.connections ? conns.length : (all ?? const <LogLine>[]).where((l) => t.matches(l.source)).length}',
+                  t: '${t.label}  ${t == _LogTab.connections ? s.connectionsTotal : (all ?? const <LogLine>[]).where((l) => t.matches(l.source)).length}',
               },
               onChanged: onTab,
             ),
           ),
         ),
       ),
+      // Фильтр соединений по пути и по времени. В списке всего отрезка — только последние соединения.
+      if (showConns && stored.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            // В узком окне кнопки переносятся на вторую строку.
+            child: Wrap(spacing: 6, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [
+              _Chip('Все', count(null), C.text, route == null, () => onRoute(null)),
+              for (final r in const [ConnRoute.proxy, ConnRoute.direct, ConnRoute.block])
+                _Chip(_routeTitle(r), count(r), _routeColor(r), route == r, () => onRoute(r)),
+              if (s.live) ...[
+                Container(width: 1, height: 18, color: C.border),
+                _Chip('Последняя минута', null, C.orange, recent, () => onRecent(!recent)),
+              ],
+              if (!recentOnly && s.connectionsTotal > stored.length)
+                Text('в списке — последние ${stored.length}', style: TextStyle(color: C.muted, fontSize: 11.5)),
+              if (s.unknownProcess > 0)
+                Tooltip(
+                  message: 'Для этих соединений ядро не смогло узнать, какая программа их открыла, и правила '
+                      'по приложениям к ним не применились.\nОбычно это службы Windows. Но если игра из списка '
+                      '«напрямую» идёт через VPN — причина в этом: её соединения помечены в списке.',
+                  waitDuration: const Duration(milliseconds: 300),
+                  child: Text('программа не определена: ${s.unknownProcess}',
+                      style: TextStyle(color: C.isDark ? C.orangeLight : C.orange, fontSize: 11.5)),
+                ),
+            ]),
+          ),
+        ),
+      // Фильтр строк журнала: только ошибки или только предупреждения.
+      if (!showConns && tabLines.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(spacing: 6, runSpacing: 6, children: [
+              _Chip('Все', tabLines.length, C.text, level == null, () => onLevel(null)),
+              _Chip('Ошибки', tabLines.where((l) => l.level == 2).length, C.red, level == 2, () => onLevel(2)),
+              _Chip('Предупреждения', tabLines.where((l) => l.level == 1).length,
+                  C.isDark ? C.orangeLight : C.orange, level == 1, () => onLevel(1)),
+            ]),
+          ),
+        ),
       Divider(height: 1, color: C.border),
       Expanded(
         child: showConns
@@ -534,7 +641,11 @@ class _SessionView extends StatelessWidget {
                     child: Padding(
                       padding: const EdgeInsets.all(24),
                       child: Text(
-                        s.live
+                        stored.isNotEmpty
+                            ? (recentOnly
+                                ? 'За последнюю минуту таких соединений не было'
+                                : 'Среди последних ${stored.length} соединений таких нет')
+                            : s.live
                             ? 'Соединений пока нет. Здесь появится, какая программа или сайт куда идёт: через VPN, напрямую или блокируется'
                             : 'Список соединений не сохраняется на диск — он виден только до закрытия программы',
                         textAlign: TextAlign.center,
@@ -542,30 +653,55 @@ class _SessionView extends StatelessWidget {
                       ),
                     ),
                   )
-                : SelectionArea(
-                    child: ListView.builder(
-                      key: ValueKey('${s.id}-connections'),
-                      primary: true,
-                      reverse: true,
-                      padding: const EdgeInsets.all(14),
-                      itemCount: conns.length,
-                      itemBuilder: (_, i) => _ConnText(conns[conns.length - 1 - i]),
-                    ),
+                : _HoldWhileReading<ConnEntry>(
+                    // Другая вкладка или другой фильтр — выделение и место чтения сбрасываются.
+                    key: ValueKey('${s.id}-connections-${route?.name}-$recentOnly'),
+                    items: conns,
+                    newLabel: 'Новые соединения',
+                    // Одинаковые соединения склеены в одну строку со счётчиком; клик разворачивает их.
+                    builder: (context, shown) {
+                      final groups = groupConnections(shown);
+                      final index = {for (var i = 0; i < groups.length; i++) groups[i].key: groups.length - 1 - i};
+                      return SelectionArea(
+                        child: ListView.builder(
+                          primary: true,
+                          reverse: true,
+                          padding: const EdgeInsets.all(14),
+                          itemCount: groups.length,
+                          itemBuilder: (_, i) {
+                            final g = groups[groups.length - 1 - i];
+                            return _ConnGroupText(g,
+                                key: ValueKey(g.key), open: open.contains(g.key), onToggle: () => onToggle(g.key));
+                          },
+                          findChildIndexCallback: (key) => index[(key as ValueKey<String>).value],
+                        ),
+                      );
+                    },
                   ))
             : all == null
             ? const Center(
                 child: Spinner(size: 24))
             : lines.isEmpty
                 ? Center(child: Text('В этом журнале таких записей нет', style: TextStyle(color: C.muted)))
-                : SelectionArea(
+                : _HoldWhileReading<LogLine>(
+                    key: ValueKey('${s.id}-${tab.name}-$level'),
+                    items: lines,
+                    newLabel: 'Новые строки',
                     // Свежие строки внизу, список «прилипает» к низу — как в консоли.
-                    child: ListView.builder(
-                      key: ValueKey('${s.id}-${tab.name}'),
-                      primary: true,
-                      reverse: true,
-                      padding: const EdgeInsets.all(14),
-                      itemCount: lines.length,
-                      itemBuilder: (_, i) => _LineText(lines[lines.length - 1 - i]),
+                    // У каждой строки свой ключ: с приходом новых строк выделение остаётся на том же
+                    // тексте, а не на том же месте списка.
+                    builder: (context, shown) => SelectionArea(
+                      child: ListView.builder(
+                        primary: true,
+                        reverse: true,
+                        padding: const EdgeInsets.all(14),
+                        itemCount: shown.length,
+                        itemBuilder: (_, i) {
+                          final l = shown[shown.length - 1 - i];
+                          return _LineText(l, key: ValueKey(l));
+                        },
+                        findChildIndexCallback: (key) => _indexFromEnd(shown, (key as ValueKey<LogLine>).value),
+                      ),
                     ),
                   ),
       ),
@@ -573,8 +709,117 @@ class _SessionView extends StatelessWidget {
   }
 }
 
+/// Список журнала, который не двигается, пока его читают. Внизу списка он следует за новыми записями;
+/// стоит прокрутить вверх — показывается снимок на этот момент, а новые записи копятся и ждут кнопки
+/// внизу (или возврата к низу списка). Иначе текст уезжал бы из-под глаз с каждой новой строкой.
+class _HoldWhileReading<T extends Object> extends StatefulWidget {
+  const _HoldWhileReading({super.key, required this.items, required this.builder, required this.newLabel});
+
+  /// Записи от старых к новым.
+  final List<T> items;
+  final Widget Function(BuildContext context, List<T> shown) builder;
+
+  /// Подпись кнопки возврата: «Новые строки», «Новые соединения».
+  final String newLabel;
+
+  @override
+  State<_HoldWhileReading<T>> createState() => _HoldWhileReadingState<T>();
+}
+
+class _HoldWhileReadingState<T extends Object> extends State<_HoldWhileReading<T>> {
+  /// Снимок списка на момент, когда начали читать; null — список следует за новыми записями.
+  List<T>? _held;
+  ScrollController? _scroll;
+
+  /// Дальше этого от низа — считаем, что читают, а не просто чуть сдвинули список.
+  static const _away = 40.0;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final scroll = PrimaryScrollController.maybeOf(context);
+    if (identical(scroll, _scroll)) return;
+    _scroll?.removeListener(_onScroll);
+    _scroll = scroll?..addListener(_onScroll);
+  }
+
+  @override
+  void dispose() {
+    _scroll?.removeListener(_onScroll);
+    super.dispose();
+  }
+
+  void _onScroll() {
+    final scroll = _scroll;
+    if (scroll == null || !scroll.hasClients) return;
+    final reading = scroll.positions.last.pixels > _away;
+    if (reading == (_held != null)) return;
+    setState(() => _held = reading ? List.of(widget.items) : null);
+  }
+
+  /// Сколько записей пришло после снимка.
+  int get _pending {
+    final held = _held;
+    if (held == null || held.isEmpty) return 0;
+    final at = widget.items.lastIndexOf(held.last);
+    return at < 0 ? widget.items.length : widget.items.length - 1 - at;
+  }
+
+  void _toBottom() {
+    final scroll = _scroll;
+    if (scroll == null || !scroll.hasClients) return;
+    scroll.animateTo(0, duration: const Duration(milliseconds: 220), curve: Curves.easeOut);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pending = _pending;
+    return Stack(children: [
+      Positioned.fill(child: widget.builder(context, _held ?? widget.items)),
+      if (_held != null)
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 10,
+          child: Center(
+            child: Hover(
+              builder: (context, hovered) => GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: _toBottom,
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: Container(
+                    padding: const EdgeInsets.fromLTRB(12, 6, 10, 6),
+                    decoration: BoxDecoration(
+                      color: C.surface2,
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(color: hovered ? C.orange : C.border),
+                      boxShadow: const [BoxShadow(color: Color(0x55000000), blurRadius: 10, offset: Offset(0, 3))],
+                    ),
+                    child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      Text(pending > 0 ? '${widget.newLabel}: $pending' : 'К последним записям',
+                          style: TextStyle(color: C.text, fontSize: 12, fontWeight: FontWeight.w600)),
+                      const SizedBox(width: 4),
+                      Icon(Icons.arrow_downward_rounded, size: 14, color: hovered ? C.orange : C.muted),
+                    ]),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+    ]);
+  }
+}
+
+/// Место записи в списке, который показан с конца (свежее — внизу); null — записи уже нет.
+int? _indexFromEnd<T>(List<T> items, T item) {
+  final i = items.lastIndexOf(item);
+  return i < 0 ? null : items.length - 1 - i;
+}
+
 class _LineText extends StatelessWidget {
-  const _LineText(this.line);
+  const _LineText(this.line, {super.key});
   final LogLine line;
 
   @override
@@ -615,6 +860,57 @@ String _routeLabel(ConnRoute r) => switch (r) {
       ConnRoute.dns => 'DNS',
     };
 
+/// Название пути для фильтра.
+String _routeTitle(ConnRoute r) => switch (r) {
+      ConnRoute.proxy => 'VPN',
+      ConnRoute.direct => 'Напрямую',
+      ConnRoute.block => 'Заблокировано',
+      ConnRoute.dns => 'DNS',
+    };
+
+Color _routeColor(ConnRoute r) => switch (r) {
+      ConnRoute.proxy => C.isDark ? C.orangeLight : C.orange,
+      ConnRoute.direct => C.green,
+      ConnRoute.block => C.red,
+      ConnRoute.dns => C.muted,
+    };
+
+/// Кнопка фильтра под вкладками: название и сколько таких записей (null — без числа).
+class _Chip extends StatelessWidget {
+  const _Chip(this.label, this.count, this.color, this.selected, this.onTap);
+  final String label;
+  final int? count;
+  final Color color;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => Hover(
+          builder: (context, hovered) => GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: onTap,
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 140),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: selected ? color.withValues(alpha: 0.14) : (hovered ? C.hover : Colors.transparent),
+                borderRadius: BorderRadius.circular(9),
+                border: Border.all(color: selected ? color.withValues(alpha: 0.5) : C.border),
+              ),
+              child: Text.rich(
+                TextSpan(children: [
+                  TextSpan(text: label, style: TextStyle(color: selected ? C.text : C.muted)),
+                  if (count != null)
+                    TextSpan(text: '  $count', style: TextStyle(color: color, fontWeight: FontWeight.w700)),
+                ]),
+                maxLines: 1,
+                style: const TextStyle(fontSize: 12, fontFeatures: [FontFeature.tabularFigures()]),
+              ),
+            ),
+          ),
+      );
+}
+
 /// Откуда соединение попало в ядро — по тегу входа.
 String _inboundLabel(String tag) => switch (tag) {
       'socks' => 'SOCKS-порт',
@@ -628,35 +924,106 @@ String _target(ConnEntry c) => c.port > 0 ? '${c.host}:${c.port}' : c.host;
 
 /// Соединение одной строкой — для копирования.
 String _connLine(ConnEntry c) => '${c.time.toIso8601String()} ${c.network} ${_target(c)} → ${_routeLabel(c.route)}'
-    '${c.outbound.isEmpty ? '' : ' (${c.outbound})'} · вход: ${_inboundLabel(c.inbound)}';
+    '${c.outbound.isEmpty ? '' : ' (${c.outbound})'} · вход: ${_inboundLabel(c.inbound)}'
+    '${c.unknownProcess ? ' · программа не определена' : ''}';
 
-/// Строка списка соединений: куда шли → каким путём отправлено.
-class _ConnText extends StatelessWidget {
-  const _ConnText(this.conn);
-  final ConnEntry conn;
+/// Строка списка соединений: куда шли → каким путём отправлено. Несколько одинаковых соединений —
+/// одна строка со счётчиком и временем последнего; клик разворачивает их все.
+class _ConnGroupText extends StatelessWidget {
+  const _ConnGroupText(this.group, {super.key, required this.open, required this.onToggle});
+  final ConnGroup group;
+  final bool open;
+  final VoidCallback onToggle;
+
+  static const _style = TextStyle(fontFamily: 'Consolas', fontSize: 12, height: 1.5);
+
+  static String _time(DateTime t) => '${_two(t.hour)}:${_two(t.minute)}:${_two(t.second)} ';
+
+  /// Через какой выход и с какого входа пришло соединение.
+  static String _via(ConnEntry c) =>
+      '${c.outbound.isEmpty ? '' : ' (${c.outbound})'} · вход: ${_inboundLabel(c.inbound)}';
 
   @override
   Widget build(BuildContext context) {
-    final c = conn;
-    final t = c.time;
-    final color = switch (c.route) {
-      ConnRoute.proxy => C.isDark ? C.orangeLight : C.orange,
-      ConnRoute.direct => C.green,
-      ConnRoute.block => C.red,
-      ConnRoute.dns => C.muted,
-    };
-    return Text.rich(
+    final c = group.last;
+    final many = group.items.length > 1;
+    final color = _routeColor(c.route);
+    final head = Text.rich(
       TextSpan(children: [
-        TextSpan(text: '${_two(t.hour)}:${_two(t.minute)}:${_two(t.second)} ', style: TextStyle(color: C.muted)),
+        TextSpan(text: _time(c.time), style: TextStyle(color: C.muted)),
         TextSpan(text: _target(c), style: TextStyle(color: C.text)),
         if (c.network == 'udp') TextSpan(text: ' udp', style: TextStyle(color: C.muted)),
         TextSpan(text: ' → ${_routeLabel(c.route)}', style: TextStyle(color: color, fontWeight: FontWeight.w700)),
-        TextSpan(
-          text: '${c.outbound.isEmpty ? '' : ' (${c.outbound})'} · вход: ${_inboundLabel(c.inbound)}',
-          style: TextStyle(color: C.muted),
-        ),
+        if (!many) TextSpan(text: _via(c), style: TextStyle(color: C.muted)),
+        // Правило по приложениям к соединению не применилось: ядро не узнало программу.
+        if (group.items.any((e) => e.unknownProcess))
+          TextSpan(text: ' · программа не определена', style: TextStyle(color: C.isDark ? C.orangeLight : C.orange)),
       ]),
-      style: const TextStyle(fontFamily: 'Consolas', fontSize: 12, height: 1.5),
+      style: _style,
     );
+    // Слева у каждой строки место под стрелку — одинаковое, чтобы время стояло в один столбец.
+    if (!many) return Padding(padding: const EdgeInsets.only(left: _arrow), child: head);
+
+    final count = group.items.length;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      // Раскрывается кликом по всей строке: стрелка слева и подсветка под курсором показывают, что это можно.
+      Tooltip(
+        message: open ? 'Свернуть' : 'Показать все соединения: $count',
+        waitDuration: const Duration(milliseconds: 600),
+        child: MouseRegion(
+          cursor: SystemMouseCursors.click,
+          child: Hover(
+            builder: (context, hovered) => GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: onToggle,
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 120),
+                decoration: BoxDecoration(
+                  color: hovered || open ? C.hover : Colors.transparent,
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(children: [
+                  SizedBox(
+                    width: _arrow,
+                    child: AnimatedRotation(
+                      turns: open ? 0.25 : 0,
+                      duration: const Duration(milliseconds: 140),
+                      child: Icon(Icons.chevron_right_rounded, size: 16, color: hovered || open ? C.orange : C.muted),
+                    ),
+                  ),
+                  Flexible(child: head),
+                  Container(
+                    margin: const EdgeInsets.only(left: 8, right: 4),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: C.surface2,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: hovered || open ? C.orange.withValues(alpha: 0.6) : C.border),
+                    ),
+                    child: Text('×$count',
+                        style: TextStyle(color: C.text, fontSize: 11, fontWeight: FontWeight.w700)),
+                  ),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      ),
+      if (open)
+        for (final e in group.items)
+          Padding(
+            padding: const EdgeInsets.only(left: _arrow + 12),
+            child: Text.rich(
+              TextSpan(children: [
+                TextSpan(text: _time(e.time), style: TextStyle(color: C.muted)),
+                TextSpan(text: _via(e).trimLeft(), style: TextStyle(color: C.muted)),
+              ]),
+              style: _style,
+            ),
+          ),
+    ]);
   }
+
+  /// Ширина места под стрелку раскрытия.
+  static const _arrow = 18.0;
 }

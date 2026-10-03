@@ -65,9 +65,7 @@ class Net {
       final res = await req.close().timeout(const Duration(seconds: 30));
       // Тело читаем тоже с ограничением: оборвавшееся соединение иначе «висело» бы бесконечно.
       final body = await res.transform(utf8.decoder).join().timeout(const Duration(seconds: 30));
-      if (res.statusCode >= 400) {
-        throw HttpException('Сервер ответил ${res.statusCode}');
-      }
+      if (res.statusCode >= 400) throw ServerRefused(res.statusCode);
 
       final meta = <String, String>{};
       res.headers.forEach((name, values) => meta[name.toLowerCase()] = values.join(','));
@@ -83,6 +81,24 @@ class Net {
         if (m != null) meta.putIfAbsent(m.group(1)!.toLowerCase(), () => m.group(2)!.trim());
       }
       return FetchedSubscription(LinkParser.parseText(text), meta);
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  /// Проверка связи через VPN: запрашивает служебную страницу Cloudflare через локальный вход ядра
+  /// и возвращает код страны, откуда пришёл запрос (`fi`), или null, если страна в ответе не указана.
+  /// Нет ответа — исключение.
+  static Future<String?> exitCountry(String host, int proxyPort) async {
+    final client = HttpClient()
+      ..connectionTimeout = const Duration(seconds: 6)
+      ..findProxy = (_) => 'PROXY 127.0.0.1:$proxyPort';
+    try {
+      final req = await client.getUrl(Uri.parse('https://$host/cdn-cgi/trace')).timeout(const Duration(seconds: 5));
+      final res = await req.close().timeout(const Duration(seconds: 5));
+      final body = await res.transform(utf8.decoder).join().timeout(const Duration(seconds: 5));
+      if (res.statusCode >= 400) throw HttpException('Сервер ответил ${res.statusCode}');
+      return RegExp(r'^loc=([A-Za-z]{2})\s*$', multiLine: true).firstMatch(body)?.group(1)?.toLowerCase();
     } finally {
       client.close(force: true);
     }

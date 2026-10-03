@@ -138,7 +138,7 @@ class Shell extends StatefulWidget {
 }
 
 class _ShellState extends State<Shell> {
-  StreamSubscription<String>? _sub;
+  StreamSubscription<ToastMessage>? _sub;
 
   static const _items = [
     (Icons.bolt_rounded, 'Главная'),
@@ -156,7 +156,7 @@ class _ShellState extends State<Shell> {
       _toast?.currentState?.dismiss();
       final key = _toast = GlobalKey<_ToastState>();
       late final OverlayEntry entry;
-      entry = OverlayEntry(builder: (_) => _Toast(key: key, text: msg, onGone: entry.remove));
+      entry = OverlayEntry(builder: (_) => _Toast(key: key, text: msg.text, kind: msg.kind, onGone: entry.remove));
       Overlay.of(context, rootOverlay: true).insert(entry);
     });
   }
@@ -259,8 +259,11 @@ class _ShellState extends State<Shell> {
 /// Всплывающее уведомление внизу окна: плавно поднимается и проявляется, через 4 секунды так же
 /// плавно уходит вниз. Закрывается кликом по нему или по крестику; пока на нём курсор — не исчезает.
 class _Toast extends StatefulWidget {
-  const _Toast({super.key, required this.text, required this.onGone});
+  const _Toast({super.key, required this.text, required this.kind, required this.onGone});
   final String text;
+
+  /// Успех, ошибка или просто сведение: значок слева и время показа.
+  final ToastKind kind;
 
   /// Уведомление полностью ушло с экрана — его можно убирать.
   final VoidCallback onGone;
@@ -281,7 +284,8 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
 
   void _arm() {
     _timer?.cancel();
-    _timer = Timer(const Duration(seconds: 4), dismiss);
+    // Ошибку нужно успеть прочитать — она держится вдвое дольше.
+    _timer = Timer(Duration(seconds: widget.kind == ToastKind.error ? 8 : 4), dismiss);
   }
 
   void dismiss() {
@@ -338,10 +342,22 @@ class _ToastState extends State<_Toast> with SingleTickerProviderStateMixin {
                     decoration: BoxDecoration(
                       color: C.surface2,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: C.border),
+                      border: Border.all(
+                          color: widget.kind == ToastKind.error ? C.red.withValues(alpha: 0.55) : C.border),
                       boxShadow: [BoxShadow(color: C.palette.shadow, blurRadius: 24, offset: const Offset(0, 8))],
                     ),
                     child: Row(mainAxisSize: MainAxisSize.min, children: [
+                      ...switch (widget.kind) {
+                        ToastKind.success => [
+                            Icon(Icons.check_circle_rounded, size: 18, color: C.green),
+                            const SizedBox(width: 10),
+                          ],
+                        ToastKind.error => [
+                            Icon(Icons.error_rounded, size: 18, color: C.red),
+                            const SizedBox(width: 10),
+                          ],
+                        ToastKind.info => const <Widget>[],
+                      },
                       Flexible(child: Text(widget.text, style: TextStyle(color: C.text, fontSize: 14))),
                       const SizedBox(width: 12),
                       Hover(

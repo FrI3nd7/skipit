@@ -26,4 +26,20 @@ void main() {
     expect(sw.elapsedMilliseconds, lessThan(1000));
     // Собственные процессы теста и его ядра помехой считаться не должны.
     expect(conflicts.every((c) => c.name.isNotEmpty), isTrue);
-  });}
+  });
+
+  test('zapret узнаётся по рабочему процессу, в том числе запущенному службой', () {
+    final sw = Stopwatch()..start();
+    final names = WinSys.processNames();
+    sw.stop();
+    // Список имён видит все процессы — и системные, путь к которым узнать нельзя.
+    expect(names, contains('system'));
+    expect(names.any((n) => n.endsWith('.exe')), isTrue);
+    expect(sw.elapsedMilliseconds, lessThan(500));
+
+    expect(WinSys.zapretIn(['explorer.exe', 'WinWS.exe']), 'zapret');
+    expect(WinSys.zapretIn(['winws2.exe', 'chrome.exe']), 'zapret 2');
+    expect(WinSys.zapretIn(['winws.exe', 'winws2.exe']), 'zapret 2');
+    expect(WinSys.zapretIn(['explorer.exe', 'winword.exe']), isNull);
+  });
+}

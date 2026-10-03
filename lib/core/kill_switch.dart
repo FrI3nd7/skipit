@@ -16,6 +16,9 @@ class KillSwitch {
   /// Фильтры сейчас стоят.
   static bool active = false;
 
+  /// Куда писать события Kill Switch (журнал программы).
+  static void Function(String text)? onLog;
+
   /// Ставит фильтры. Нужны права администратора (они же нужны для TUN).
   static Future<void> engage() async {
     if (active) return;
@@ -26,6 +29,7 @@ class KillSwitch {
         'v6': XrayConfig.tunV6,
       });
       active = true;
+      onLog?.call('Kill Switch включён');
     } on PlatformException catch (e) {
       throw CoreException('Не удалось включить Kill Switch (${e.message}). '
           'Подключение остановлено, чтобы не работать без обещанной защиты. '
@@ -40,7 +44,28 @@ class KillSwitch {
     if (!active) return;
     active = false;
     try {
-      await _channel.invokeMethod<void>('release');
+      final r = await _channel.invokeMapMethod<String, Object?>('release');
+      final code = r?['code'] as int? ?? 0, left = r?['left'] as int? ?? -1;
+      onLog?.call('Kill Switch снят');
+      // Windows должна убрать все фильтры разом. Если нет — интернет остался бы закрытым без причины на экране.
+      if (code != 0 || left > 0) {
+        onLog?.call('Ошибка: Kill Switch снят не полностью — ответ Windows 0x${code.toRadixString(16)}, '
+            'фильтров осталось: $left');
+      }
+    } catch (_) {}
+  }
+
+  /// Проверка после отключения: программа считает Kill Switch снятым — так ли это в Windows.
+  /// Расхождение пишется в журнал.
+  static Future<void> verifyReleased() async {
+    if (active) return;
+    try {
+      final r = await _channel.invokeMapMethod<String, Object?>('status');
+      final engaged = r?['engaged'] == true, left = r?['left'] as int? ?? -1;
+      if (engaged || left > 0) {
+        onLog?.call('Ошибка: Kill Switch считается снятым, но фильтры в Windows остались '
+            '(сеанс открыт: ${engaged ? 'да' : 'нет'}, фильтров: $left)');
+      }
     } catch (_) {}
   }
 }

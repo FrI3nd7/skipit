@@ -20,7 +20,8 @@ class LogLine {
   late final int level = _levelOf(text);
 
   static int _levelOf(String text) {
-    final t = text.toLowerCase();
+    // NOERROR в ответе DNS значит «ошибки нет» — слово «error» внутри него не в счёт.
+    final t = text.toLowerCase().replaceAll('noerror', '');
     // Программа спросила имя сайта, которого не существует. Ядро пишет это как ошибку, но VPN тут
     // ни при чём — оставляем предупреждением.
     if (t.contains('failed to resolve ip') && t.contains('rcode: 3')) return 1;
@@ -55,10 +56,18 @@ class ConnEntry {
     required this.inbound,
     required this.outbound,
     required this.route,
+    this.source = '',
     DateTime? time,
   }) : time = time ?? DateTime.now();
 
   final DateTime time;
+
+  /// Откуда пришло соединение: локальный адрес и порт программы (`172.19.0.1:63662`).
+  final String source;
+
+  /// Ядро не смогло узнать, какая программа открыла это соединение, — правила по приложениям
+  /// к нему не применились, оно пошло общим путём.
+  bool unknownProcess = false;
 
   /// tcp или udp.
   final String network;
@@ -70,7 +79,10 @@ class ConnEntry {
   final String outbound;
   final ConnRoute route;
 
-  static final _access = RegExp(r'from \S+ accepted (\S+)(?: \[(.+?)\])?');
+  static final _access = RegExp(r'from (\S+) accepted (\S+)(?: \[(.+?)\])?');
+
+  /// Адрес без приставки сети: `udp:172.19.0.1:63662` → `172.19.0.1:63662`.
+  static String bareAddress(String address) => address.replaceFirst(RegExp(r'^(tcp|udp):'), '');
   static final _target = RegExp(r'^(?:(tcp|udp):)?(.+):(\d+)$');
 
   /// Разбирает строку журнала доступа Xray:
@@ -81,9 +93,9 @@ class ConnEntry {
   static ConnEntry? tryParse(String line, Map<String, ConnRoute> routes) {
     final m = _access.firstMatch(line);
     if (m == null) return null;
-    final tags = (m.group(2) ?? '').split(RegExp(r'\s*(?:->|>>)\s*'));
+    final tags = (m.group(3) ?? '').split(RegExp(r'\s*(?:->|>>)\s*'));
     final outbound = tags.length > 1 ? tags.last.trim() : '';
-    var network = 'tcp', host = m.group(1)!, port = 0;
+    var network = 'tcp', host = m.group(2)!, port = 0;
     final url = host.contains('://') ? Uri.tryParse(host) : null;
     // HTTPS через прокси-порт (CONNECT) записан как //example.com:443.
     if (host.startsWith('//')) host = host.substring(2);
@@ -103,8 +115,35 @@ class ConnEntry {
       inbound: tags.first.trim(),
       outbound: outbound,
       route: routes[outbound] ?? ConnRoute.proxy,
+      source: bareAddress(m.group(1)!),
     );
   }
+}
+
+/// Соединения с одним и тем же адресом, отправленные одним путём: в списке они показаны одной
+/// строкой со счётчиком.
+class ConnGroup {
+  ConnGroup(this.key);
+
+  /// Сеть, адрес, порт и путь — то, что у соединений группы общее.
+  final String key;
+
+  /// Соединения группы, от старых к новым.
+  final items = <ConnEntry>[];
+  ConnEntry get last => items.last;
+}
+
+/// Склеивает повторы. Группы идут по времени последнего соединения: к чему обращались только что — в конце.
+List<ConnGroup> groupConnections(Iterable<ConnEntry> conns) {
+  final groups = <String, ConnGroup>{};
+  for (final c in conns) {
+    final key = '${c.network}:${c.host}:${c.port}>${c.route.name}';
+    // Группа переставляется в конец: порядок словаря — порядок последних обращений.
+    final g = groups.remove(key) ?? ConnGroup(key);
+    g.items.add(c);
+    groups[key] = g;
+  }
+  return groups.values.toList();
 }
 
 /// Отрезок журнала: одно подключение к серверу или время без подключения между ними.
@@ -133,6 +172,12 @@ class LogSession {
   final String detail;
   final File? file;
 
+  /// Продолжения файла: когда [file] заполнен, запись идёт в следующую часть (`<id>-2.log`, `<id>-3.log`…).
+  final parts = <File>[];
+
+  /// Все файлы отрезка по порядку.
+  List<File> get files => [if (file != null) file!, ...parts];
+
   int count = 0;
   int warnings = 0;
   int errors = 0;
@@ -145,6 +190,15 @@ class LogSession {
 
   /// Соединения программ за этот отрезок. Живут только в памяти: на диск список сайтов не пишется.
   final connections = <ConnEntry>[];
+
+  /// Сколько соединений было за отрезок по каждому пути. В [connections] остаются только последние
+  /// [LogBuffer.maxConnections], счёт же идёт по всем.
+  final connectionCounts = <ConnRoute, int>{};
+
+  int get connectionsTotal => connectionCounts.values.fold(0, (a, b) => a + b);
+
+  /// Для скольких соединений ядро не узнало программу (см. [ConnEntry.unknownProcess]).
+  int unknownProcess = 0;
 
   RandomAccessFile? _out;
   int _written = 0;
@@ -169,8 +223,15 @@ class LogBuffer extends ChangeNotifier {
   /// Столько последних соединений помним в одном отрезке.
   static const maxConnections = 2000;
 
-  /// И больше этого в файл одного отрезка не пишем.
-  static const _fileLimit = 4 * 1024 * 1024;
+  /// Размер одной части файла отрезка. Заполнилась — запись продолжается в следующей части.
+  @visibleForTesting
+  static int fileLimit = 4 * 1024 * 1024;
+
+  /// Частей у одного отрезка не больше этого. Дальше строки ядер в файл не идут (в окне они есть),
+  /// а строки самой программы — подключение, ошибки, Kill Switch — пишутся всегда.
+  static const maxParts = 5;
+
+  static final _partName = RegExp(r'^(.*_\d{3})-(\d+)$');
 
   /// Все отрезки, от старых к новым.
   final sessions = <LogSession>[];
@@ -199,17 +260,38 @@ class LogBuffer extends ChangeNotifier {
       final files = dir.listSync().whereType<File>().where((f) => f.path.endsWith('.log')).toList()
         ..sort((a, b) => a.path.compareTo(b.path));
       final past = <LogSession>[];
+      final continued = <LogSession>[];
       for (final f in files) {
-        if (sessions.any((s) => s.file?.path == f.path)) continue;
+        if (sessions.any((s) => s.files.any((x) => x.path == f.path))) continue;
         final s = await _readSession(f, keepLines: false);
-        if (s != null) past.add(s);
+        if (s == null) continue;
+        (_partName.hasMatch(s.id) ? continued : past).add(s);
       }
+      // Части приклеиваются к своему отрезку: в списке подключение остаётся одной строкой.
+      continued.sort((a, b) => _partNumber(a.id).compareTo(_partNumber(b.id)));
+      for (final part in continued) {
+        final base = _partName.firstMatch(part.id)!.group(1);
+        final owner = past.where((s) => s.id == base).firstOrNull;
+        if (owner == null) {
+          past.add(part);
+          continue;
+        }
+        owner
+          ..parts.add(part.file!)
+          ..count += part.count
+          ..warnings += part.warnings
+          ..errors += part.errors;
+        if (part.end.isAfter(owner.end)) owner.end = part.end;
+      }
+      past.sort((a, b) => a.id.compareTo(b.id));
       sessions.insertAll(0, past);
       notifyListeners();
     } catch (_) {
       // Папка недоступна — журнал остаётся в памяти.
     }
   }
+
+  static int _partNumber(String id) => int.parse(_partName.firstMatch(id)!.group(2)!);
 
   /// День из имени файла: журнал дня живёт [keepDays] дней, потом удаляется целиком.
   void _purgeOld() {
@@ -268,8 +350,11 @@ class LogBuffer extends ChangeNotifier {
   /// Подгружает строки прошлого отрезка с диска (текущий и так в памяти).
   Future<void> load(LogSession s) async {
     if (s.lines != null || s.file == null || !_loading.add(s.id)) return;
-    final full = await _readSession(s.file!, keepLines: true);
-    s.lines = full?.lines ?? [];
+    final lines = <LogLine>[];
+    for (final f in s.files) {
+      lines.addAll((await _readSession(f, keepLines: true))?.lines ?? const []);
+    }
+    s.lines = lines;
     _loading.remove(s.id);
     notifyListeners();
   }
@@ -381,20 +466,51 @@ class LogBuffer extends ChangeNotifier {
     s.lines!.add(line);
     if (s.lines!.length > maxLines) s.lines!.removeRange(0, s.lines!.length - maxLines);
     s._count(line);
-    if (s._out != null && s._written < _fileLimit) {
+    if (s._out == null) return;
+    if (s._written >= fileLimit && s.parts.length < maxParts - 1) _nextPart(s);
+    // Все части заполнены: строки ядер дальше не пишутся, а события программы (отключение, ошибки,
+    // Kill Switch) — пишутся всегда, иначе по файлу нельзя было бы понять, чем всё закончилось.
+    final core = line.source == 'xray' || line.source == 'sing-box' || line.source == 'test';
+    if (s._written >= fileLimit && core) return;
+    try {
+      final row = '${line.time.toIso8601String()}\t${line.source}\t${line.text}\n';
+      s._out!.writeStringSync(row);
+      s._written += row.length;
+    } catch (_) {}
+  }
+
+  /// Файл отрезка заполнен — запись продолжается в следующей части.
+  void _nextPart(LogSession s) {
+    final dir = _dir;
+    if (dir == null) return;
+    final file = File('${dir.path}\\${s.id}-${s.parts.length + 2}.log');
+    try {
+      final out = file.openSync(mode: FileMode.write);
+      out.writeStringSync('#${jsonEncode({
+            'start': s.start.toIso8601String(),
+            'connection': s.connection,
+            'title': s.title,
+            'detail': s.detail,
+            'part': s.parts.length + 2,
+          })}\n');
       try {
-        final row = '${line.time.toIso8601String()}\t${line.source}\t${line.text}\n';
-        s._out!.writeStringSync(row);
-        s._written += row.length;
+        s._out?.closeSync();
       } catch (_) {}
+      s._out = out;
+      s._written = 0;
+      s.parts.add(file);
+    } catch (_) {
+      // Новую часть создать не удалось — остаёмся на прежней (она заполнена, строки ядер не пишутся).
     }
   }
 
   /// Соединение программы (из журнала доступа Xray) — в текущий отрезок, только в память.
   void addConnection(ConnEntry c) {
-    final list = _current?.connections;
-    if (list == null) return;
+    final s = _current;
+    if (s == null) return;
+    final list = s.connections;
     list.add(c);
+    s.connectionCounts[c.route] = (s.connectionCounts[c.route] ?? 0) + 1;
     if (list.length > maxConnections) list.removeRange(0, list.length - maxConnections);
     // Соединений бывают сотни в секунду (загрузки, торренты): окно журнала обновляется не на каждое,
     // а не чаще четырёх раз в секунду — иначе оно перерисовывалось бы без остановки.
@@ -402,6 +518,18 @@ class LogBuffer extends ChangeNotifier {
       _connNotify = null;
       notifyListeners();
     });
+  }
+
+  /// Ядро не узнало программу для ещё одного соединения. Возвращает, сколько их набралось за отрезок.
+  int addUnknownProcess() {
+    final s = _current;
+    if (s == null) return 0;
+    s.unknownProcess++;
+    _connNotify ??= Timer(const Duration(milliseconds: 250), () {
+      _connNotify = null;
+      notifyListeners();
+    });
+    return s.unknownProcess;
   }
 
   Timer? _connNotify;
@@ -412,9 +540,7 @@ class LogBuffer extends ChangeNotifier {
   /// Удаляет прошлый отрезок вместе с файлом. Текущий удалить нельзя — в него идёт запись.
   void remove(LogSession s) {
     if (s.live) return;
-    try {
-      s.file?.deleteSync();
-    } catch (_) {}
+    _deleteFiles(s);
     sessions.remove(s);
     notifyListeners();
   }
@@ -422,12 +548,18 @@ class LogBuffer extends ChangeNotifier {
   /// Удаляет все прошлые отрезки; текущий остаётся.
   void clearHistory() {
     for (final s in sessions.where((s) => !s.live).toList()) {
-      try {
-        s.file?.deleteSync();
-      } catch (_) {}
+      _deleteFiles(s);
       sessions.remove(s);
     }
     notifyListeners();
+  }
+
+  static void _deleteFiles(LogSession s) {
+    for (final f in s.files) {
+      try {
+        f.deleteSync();
+      } catch (_) {}
+    }
   }
 
   String tail(int n, {String? source}) => lines

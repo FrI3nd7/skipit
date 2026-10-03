@@ -52,7 +52,8 @@ class SingboxConfig {
     required RoutingProfile routing,
     required AppRules apps,
     required List<String> serverDomains,
-
+    int? statsPort,
+    String statsSecret = '',
   }) {
     final rules = <Map<String, dynamic>>[
       {'action': 'sniff'},
@@ -91,7 +92,8 @@ class SingboxConfig {
 
     final ipv6 = settings.ipv6;
     return {
-      'log': {'level': settings.logLevel == 'warning' ? 'warn' : settings.logLevel, 'timestamp': true},
+      // Своё время ядро не пишет: журнал программы ставит его каждой строке сам.
+      'log': {'level': settings.logLevel == 'warning' ? 'warn' : settings.logLevel, 'timestamp': false},
       'dns': {
         'servers': [
           _dnsServer('remote', routing.remoteDnsAddress, detour: 'proxy'),
@@ -132,6 +134,12 @@ class SingboxConfig {
         'auto_detect_interface': true,
         'default_domain_resolver': 'bootstrap',
       },
+      // Список соединений для счётчика трафика «напрямую». Слушает только этот компьютер и закрыт
+      // ключом: без него другая программа могла бы разрывать соединения и менять режим ядра.
+      if (statsPort != null)
+        'experimental': {
+          'clash_api': {'external_controller': '127.0.0.1:$statsPort', 'secret': statsSecret},
+        },
     };
   }
 }

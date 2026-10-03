@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'paths.dart';
 
@@ -254,6 +255,129 @@ class WinSys {
     }
     return result;
   }
+
+  /// Имена exe всех процессов (строчными буквами). В отличие от [_processes], видит и те, чей путь
+  /// узнать нельзя: службы и программы, запущенные с правами выше наших.
+  static List<String> processNames() {
+    final k32 = DynamicLibrary.open('kernel32.dll');
+    final getHeap = k32.lookupFunction<Pointer<Void> Function(), Pointer<Void> Function()>('GetProcessHeap');
+    final heapAlloc = k32.lookupFunction<Pointer<Void> Function(Pointer<Void>, Uint32, IntPtr),
+        Pointer<Void> Function(Pointer<Void>, int, int)>('HeapAlloc');
+    final heapFree = k32.lookupFunction<Int32 Function(Pointer<Void>, Uint32, Pointer<Void>),
+        int Function(Pointer<Void>, int, Pointer<Void>)>('HeapFree');
+    final snapshot = k32.lookupFunction<Pointer<Void> Function(Uint32, Uint32), Pointer<Void> Function(int, int)>(
+        'CreateToolhelp32Snapshot');
+    final first = k32.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Void>),
+        int Function(Pointer<Void>, Pointer<Void>)>('Process32FirstW');
+    final next = k32.lookupFunction<Int32 Function(Pointer<Void>, Pointer<Void>),
+        int Function(Pointer<Void>, Pointer<Void>)>('Process32NextW');
+    final closeHandle = k32.lookupFunction<Int32 Function(Pointer<Void>), int Function(Pointer<Void>)>('CloseHandle');
+
+    // PROCESSENTRY32W (x64): размер 568 байт, имя файла — 260 символов со смещения 44.
+    const entrySize = 568, nameOffset = 44, nameChars = 260;
+    const snapProcess = 0x2;
+    final names = <String>[];
+    final snap = snapshot(snapProcess, 0);
+    if (snap.address == 0 || snap.address == -1) return names;
+    final heap = getHeap();
+    final entry = heapAlloc(heap, 0x8, entrySize);
+    try {
+      entry.cast<Uint32>().value = entrySize;
+      var ok = first(snap, entry);
+      while (ok != 0) {
+        final chars = Pointer<Uint16>.fromAddress(entry.address + nameOffset).asTypedList(nameChars);
+        final end = chars.indexOf(0);
+        names.add(String.fromCharCodes(chars, 0, end < 0 ? nameChars : end).toLowerCase());
+        ok = next(snap, entry);
+      }
+    } finally {
+      heapFree(heap, 0, entry);
+      closeHandle(snap);
+    }
+    return names;
+  }
+
+  /// Шифрует данные ключом учётной записи Windows (DPAPI — им же браузеры защищают сохранённые пароли).
+  /// Расшифровать их может только тот же пользователь на том же компьютере. null — не получилось.
+  static Uint8List? protect(Uint8List data) => _dpapi(data, 'CryptProtectData');
+
+  /// Расшифровывает то, что зашифровал [protect]. null — данные чужие (другой пользователь или
+  /// компьютер) или повреждены.
+  static Uint8List? unprotect(Uint8List data) => _dpapi(data, 'CryptUnprotectData');
+
+  static Uint8List? _dpapi(Uint8List data, String function) {
+    try {
+      final k32 = DynamicLibrary.open('kernel32.dll');
+      final getHeap = k32.lookupFunction<Pointer<Void> Function(), Pointer<Void> Function()>('GetProcessHeap');
+      final heapAlloc = k32.lookupFunction<Pointer<Void> Function(Pointer<Void>, Uint32, IntPtr),
+          Pointer<Void> Function(Pointer<Void>, int, int)>('HeapAlloc');
+      final heapFree = k32.lookupFunction<Int32 Function(Pointer<Void>, Uint32, Pointer<Void>),
+          int Function(Pointer<Void>, int, Pointer<Void>)>('HeapFree');
+      final localFree =
+          k32.lookupFunction<Pointer<Void> Function(Pointer<Void>), Pointer<Void> Function(Pointer<Void>)>('LocalFree');
+      // У обеих функций одинаковый набор параметров: вход, описание, доп. ключ, резерв, окно, флаги, выход.
+      final crypt = DynamicLibrary.open('crypt32.dll').lookupFunction<
+          Int32 Function(Pointer<Void>, Pointer<Void>, Pointer<Void>, Pointer<Void>, Pointer<Void>, Uint32, Pointer<Void>),
+          int Function(Pointer<Void>, Pointer<Void>, Pointer<Void>, Pointer<Void>, Pointer<Void>, int,
+              Pointer<Void>)>(function);
+
+      // DATA_BLOB (x64): длина — 4 байта, указатель на данные — со смещения 8.
+      const blobSize = 16, uiForbidden = 0x1;
+      final heap = getHeap();
+      final input = heapAlloc(heap, 0x8, data.isEmpty ? 1 : data.length);
+      final inBlob = heapAlloc(heap, 0x8, blobSize);
+      final outBlob = heapAlloc(heap, 0x8, blobSize);
+      try {
+        input.cast<Uint8>().asTypedList(data.length).setAll(0, data);
+        inBlob.cast<Uint32>().value = data.length;
+        Pointer<IntPtr>.fromAddress(inBlob.address + 8).value = input.address;
+        if (crypt(inBlob, nullptr, nullptr, nullptr, nullptr, uiForbidden, outBlob) == 0) return null;
+        final length = outBlob.cast<Uint32>().value;
+        final out = Pointer<Uint8>.fromAddress(Pointer<IntPtr>.fromAddress(outBlob.address + 8).value);
+        final result = Uint8List.fromList(out.asTypedList(length));
+        localFree(out.cast());
+        return result;
+      } finally {
+        for (final p in [input, inBlob, outBlob]) {
+          heapFree(heap, 0, p);
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Очищает кэш DNS Windows (то же, что `ipconfig /flushdns`). В кэше остаются ответы от прежнего
+  /// состояния сети: до подключения — от обычного DNS, после — от DNS VPN. Со старыми ответами
+  /// программы ходили бы на серверы, выбранные для другой сети.
+  static bool flushDnsCache() {
+    try {
+      final flush = DynamicLibrary.open('dnsapi.dll')
+          .lookupFunction<Int32 Function(), int Function()>('DnsFlushResolverCache');
+      return flush() != 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Запущенный zapret (обход блокировок, который вмешивается в пакеты): его название или null.
+  /// С ним VPN не подключается: zapret правит и соединение с VPN-сервером.
+  static String? zapretRunning() {
+    try {
+      return zapretIn(processNames());
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Рабочие процессы zapret: winws.exe — zapret, winws2.exe — zapret 2.
+  static String? zapretIn(Iterable<String> names) {
+    final found = names.map((n) => n.toLowerCase()).toSet();
+    if (found.contains('winws2.exe')) return 'zapret 2';
+    if (found.contains('winws.exe')) return 'zapret';
+    return null;
+  }
+
   /// Можно ли открывать такой адрес из данных провайдера: только веб-ссылки и Telegram.
   /// Иначе провайдер (или тот, кто подменил его ответ) мог бы подсунуть путь к программе —
   /// «Проводник» запустил бы её по клику на «Поддержка».

@@ -28,6 +28,9 @@ class ServersPanel extends StatefulWidget {
   State<ServersPanel> createState() => _ServersPanelState();
 }
 
+/// Ширина дорожки полосы прокрутки справа от списка серверов.
+const scrollGutter = 14.0;
+
 class _ServersPanelState extends State<ServersPanel> {
   String _query = '';
   final _search = TextEditingController();
@@ -148,7 +151,8 @@ class _ServersPanelState extends State<ServersPanel> {
     ];
 
     return widget.scrollable
-        ? ListView(primary: true, padding: const EdgeInsets.only(bottom: 24), children: children)
+        // Справа — своя дорожка для полосы прокрутки, чтобы она не ложилась на карточки и кнопки.
+        ? ListView(primary: true, padding: const EdgeInsets.only(right: scrollGutter, bottom: 24), children: children)
         : Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: children);
   }
 }

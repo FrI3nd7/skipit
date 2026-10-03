@@ -20,6 +20,14 @@ std::wstring KillSwitchEngage(const std::vector<std::wstring>& apps, const std::
                               const std::wstring& tun_v6);
 
 // Снимает фильтры. Безопасно вызывать, когда они не стоят.
-void KillSwitchRelease();
+// Возвращает ответ Windows на закрытие сеанса (0 — успех или фильтры не стояли).
+unsigned long KillSwitchRelease();
+
+// Сеанс с фильтрами сейчас открыт этой программой.
+bool KillSwitchEngaged();
+
+// Сколько фильтров Kill Switch сейчас стоит в Windows — от любой копии программы.
+// -1 — узнать не удалось (нет прав администратора). Для проверки, что после снятия ничего не осталось.
+int KillSwitchCountFilters();
 
 #endif  // RUNNER_KILL_SWITCH_H_

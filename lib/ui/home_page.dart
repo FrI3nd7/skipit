@@ -45,11 +45,49 @@ class _HomePageState extends State<HomePage> {
     final connected = state.isConnected;
 
     final statusText = switch (state.status) {
+      // Ядро работает, но сервер не отвечает — писать «Защищено» было бы неправдой.
+      ConnStatus.connected when state.linkDown => 'Нет связи',
       ConnStatus.connected => 'Защищено',
       ConnStatus.connecting => 'Подключаемся…',
       ConnStatus.disconnecting => 'Отключаемся…',
       ConnStatus.disconnected => 'Не подключено',
     };
+
+    final blockedCore = state.firewallBlockedCore;
+    final Widget? notice = !connected
+        ? null
+        : blockedCore != null
+            ? _NoticeBox(
+                icon: Icons.gpp_bad_rounded,
+                color: C.red,
+                title: 'Файрвол не пускает SkipIt в сеть',
+                text: 'Разрешите в файрволе файл $blockedCore и подключитесь снова',
+                actionLabel: 'Показать файл',
+                actionIcon: Icons.folder_open_rounded,
+                onAction: () => state.showCoreFile(blockedCore),
+              )
+            : state.linkDown
+                ? _NoticeBox(
+                    icon: Icons.cloud_off_rounded,
+                    color: C.red,
+                    title: 'VPN подключён, но связи нет',
+                    text: 'Сервер не отвечает. Попробуйте переподключиться или выбрать другой сервер',
+                    actionLabel: 'Переподключиться',
+                    actionIcon: Icons.refresh_rounded,
+                    onAction: state.isBusy ? null : state.reconnect,
+                  )
+                : state.appRulesPending
+                    ? _NoticeBox(
+                        icon: Icons.info_rounded,
+                        color: C.orange,
+                        title: 'Список программ изменён',
+                        text: 'Правила по приложениям (Маршрутизация → Приложения) начнут действовать '
+                            'после переподключения',
+                        actionLabel: 'Применить',
+                        actionIcon: Icons.refresh_rounded,
+                        onAction: state.isBusy ? null : state.reconnect,
+                      )
+                    : null;
 
     final stage = Column(mainAxisSize: MainAxisSize.min, children: [
       ConnectGlow(
@@ -81,7 +119,17 @@ class _HomePageState extends State<HomePage> {
           fontFeatures: const [FontFeature.tabularFigures()],
         ),
       ),
-      const SizedBox(height: 22),
+      // Откуда сайты видят компьютер и стоит ли Kill Switch. Высота постоянная: строка появляется
+      // через пару секунд после подключения, и всё, что ниже, не должно прыгать.
+      const SizedBox(height: 5),
+      SizedBox(
+        height: 16,
+        // Пока связи нет, последняя известная страна не показывается: сейчас это уже неправда.
+        child: connected
+            ? _ExitInfo(country: state.linkDown ? null : state.exitCountry, killSwitch: state.killSwitchOn)
+            : null,
+      ),
+      const SizedBox(height: 12),
       Segmented<ConnectionMode>(
         value: state.settings.mode,
         items: {
@@ -126,9 +174,9 @@ class _HomePageState extends State<HomePage> {
       SizedBox(
         width: 360,
         child: Row(children: [
-          Expanded(child: _Speed(icon: Icons.arrow_upward_rounded, label: 'Отдача', speed: state.stats.upSpeed, total: state.stats.up, active: connected)),
+          Expanded(child: _Speed(icon: Icons.arrow_upward_rounded, label: 'Отдача', speed: state.stats.upSpeed, vpn: state.stats.vpnUp, direct: state.stats.directUp, active: connected)),
           const SizedBox(width: 10),
-          Expanded(child: _Speed(icon: Icons.arrow_downward_rounded, label: 'Загрузка', speed: state.stats.downSpeed, total: state.stats.down, active: connected)),
+          Expanded(child: _Speed(icon: Icons.arrow_downward_rounded, label: 'Загрузка', speed: state.stats.downSpeed, vpn: state.stats.vpnDown, direct: state.stats.directDown, active: connected)),
         ]),
       ),
       const SizedBox(height: 10),
@@ -140,6 +188,12 @@ class _HomePageState extends State<HomePage> {
           constraints: const BoxConstraints(maxWidth: 360),
           child: _KillSwitchBox(onRelease: state.releaseKillSwitch),
         ),
+      ],
+      // Подсказки о том, что мешает VPN. Одна за раз, самая важная; при ошибке или закрытом
+      // интернете не показываются — там уже сказано главное.
+      if (!state.killSwitchHolding && state.lastError == null && notice != null) ...[
+        const SizedBox(height: 14),
+        ConstrainedBox(constraints: const BoxConstraints(maxWidth: 360), child: notice),
       ],
       if (state.lastError != null) ...[
         const SizedBox(height: 14),
@@ -175,7 +229,8 @@ class _HomePageState extends State<HomePage> {
                 ),
               ),
               const Expanded(
-                child: Padding(padding: EdgeInsets.fromLTRB(4, 24, 24, 0), child: ServersPanel()),
+                // Правый отступ вместе с дорожкой полосы прокрутки в списке даёт те же 24 точки.
+                child: Padding(padding: EdgeInsets.fromLTRB(4, 24, 24 - scrollGutter, 0), child: ServersPanel()),
               ),
             ])
           : ListView(
@@ -344,6 +399,81 @@ class _KillSwitchBox extends StatelessWidget {
       );
 }
 
+/// Подсказка на главной: что мешает VPN и кнопка, которая это исправляет.
+class _NoticeBox extends StatelessWidget {
+  const _NoticeBox({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.text,
+    required this.actionLabel,
+    required this.actionIcon,
+    required this.onAction,
+  });
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String text;
+  final String actionLabel;
+  final IconData actionIcon;
+  final VoidCallback? onAction;
+
+  @override
+  Widget build(BuildContext context) => Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withValues(alpha: 0.45)),
+        ),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Row(children: [
+            Icon(icon, size: 18, color: color),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(title, style: TextStyle(color: C.text, fontSize: 13, fontWeight: FontWeight.w700)),
+            ),
+          ]),
+          const SizedBox(height: 6),
+          Text(text, style: TextStyle(color: C.muted, fontSize: 12.5)),
+          const SizedBox(height: 10),
+          GhostButton(label: actionLabel, icon: actionIcon, onPressed: onAction),
+        ]),
+      );
+}
+
+/// Строка под временем подключения: страна выхода (флаг и название) и отметка Kill Switch.
+class _ExitInfo extends StatelessWidget {
+  const _ExitInfo({required this.country, required this.killSwitch});
+  final String? country;
+  final bool killSwitch;
+
+  @override
+  Widget build(BuildContext context) {
+    final style = TextStyle(color: C.muted, fontSize: 12);
+    return Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.center, children: [
+      if (country != null) ...[
+        Tooltip(
+          message: 'Из этой страны сайты видят ваш компьютер',
+          waitDuration: const Duration(milliseconds: 500),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            FlagIcon(country!, height: 11),
+            const SizedBox(width: 6),
+            Text(Flags.countryName(country!), style: style),
+          ]),
+        ),
+      ],
+      if (country != null && killSwitch) Text('  ·  ', style: style),
+      if (killSwitch) ...[
+        Icon(Icons.shield_rounded, size: 12, color: C.muted),
+        const SizedBox(width: 4),
+        Text('Kill Switch', style: style),
+      ],
+    ]);
+  }
+}
+
 /// Сообщение об ошибке подключения. Закрывается крестиком и само исчезает через 10 секунд;
 /// пока на нём курсор (читают или выделяют текст) — не исчезает.
 class _ErrorBox extends StatefulWidget {
@@ -422,12 +552,23 @@ class _ErrorBoxState extends State<_ErrorBox> {
       );
 }
 class _Speed extends StatelessWidget {
-  const _Speed({required this.icon, required this.label, required this.speed, required this.total, required this.active});
+  const _Speed({required this.icon, required this.label, required this.speed, required this.vpn, required this.direct, required this.active});
   final IconData icon;
   final String label;
   final int speed;
-  final int total;
+
+  /// Сколько всего прошло через VPN и сколько напрямую.
+  final int vpn, direct;
   final bool active;
+
+  Widget _total(String name, int bytes) => Row(children: [
+        Text(name, style: TextStyle(color: C.muted, fontSize: 10.5)),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Text(formatBytes(bytes),
+              maxLines: 1, textAlign: TextAlign.right, style: TextStyle(color: C.muted, fontSize: 10.5)),
+        ),
+      ]);
 
   @override
   Widget build(BuildContext context) => Container(
@@ -445,7 +586,11 @@ class _Speed extends StatelessWidget {
               Text(label, style: TextStyle(color: C.muted, fontSize: 11)),
               Text(active ? formatSpeed(speed) : '—',
                   maxLines: 1, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800)),
-              if (active) Text(formatBytes(total), style: TextStyle(color: C.muted, fontSize: 10.5)),
+              if (active) ...[
+                const SizedBox(height: 2),
+                _total('VPN', vpn),
+                _total('Напрямую', direct),
+              ],
             ]),
           ),
         ]),

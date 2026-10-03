@@ -96,12 +96,17 @@ class Pinger {
 
     final base = await _freeRange(servers.length);
     if (base == null) return failAll('Нет свободных портов для проверки задержки');
-    await File(AppPaths.testConfigFile).writeAsString(jsonEncode(XrayConfig.buildTest(servers, base)));
+    // Конфиг проверки (в нём адреса и ключи серверов) ядро получает напрямую, без файла на диске.
+    final config = jsonEncode(XrayConfig.buildTest(servers, base));
+    try {
+      final old = File(AppPaths.testConfigFile);
+      if (old.existsSync()) await old.delete();
+    } catch (_) {}
     final proc = CoreProcess('test', log);
     // Отмена останавливает тестовое ядро — запросы через него сразу обрываются.
     cancel?._onCancel.add(proc.stop);
     try {
-      await proc.start(AppPaths.xrayExe, ['run', '-c', AppPaths.testConfigFile]);
+      await proc.start(AppPaths.xrayExe, ['run', '-c', 'stdin:'], input: config);
       final ok = await waitForPort(base, alive: () => proc.running);
       if (cancel?.cancelled ?? false) return;
       if (!ok || !proc.running) return failAll('Xray не запустился для проверки задержки');
