@@ -19,6 +19,9 @@ class LogLine {
   /// 2 — ошибка, 1 — предупреждение, 0 — обычная строка.
   late final int level = _levelOf(text);
 
+  /// Пометка уровня, которую ставит само ядро: `[Warning]` у Xray, `WARN` в начале строки у sing-box.
+  static final _coreLevel = RegExp(r'\[(debug|info|warning|error)\]|^\s*(trace|debug|info|warn|error|fatal|panic)\b');
+
   static int _levelOf(String text) {
     // NOERROR в ответе DNS значит «ошибки нет» — слово «error» внутри него не в счёт.
     final t = text.toLowerCase().replaceAll('noerror', '');
@@ -34,6 +37,17 @@ class LogLine {
     }
     // Проверка интернета по IPv6, которую делает сама Windows: при выключенном IPv6 она не проходит всегда.
     if (t.contains('ipv6.msftncsi.com') || t.contains('ipv6.msftconnecttest.com')) return 0;
+    // Ядра сами помечают уровень строки — ему и верим. Иначе предупреждение из модуля «common/errors»
+    // или обычная строка со словом «error» в адресе сайта считались бы ошибкой.
+    final own = _coreLevel.firstMatch(t);
+    if (own != null) {
+      return switch (own.group(1) ?? own.group(2)) {
+        'error' || 'fatal' || 'panic' => 2,
+        // Xray пишет «[Warning] core: Xray … started» при обычном запуске — это не предупреждение.
+        'warning' || 'warn' => t.contains('started') ? 0 : 1,
+        _ => 0,
+      };
+    }
     if (t.contains('error') || t.contains('fatal') || t.contains('panic') || t.contains('ошибк') ||
         t.contains('сбой') || t.contains('не удалось')) {
       return 2;

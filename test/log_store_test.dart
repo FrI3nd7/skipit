@@ -187,6 +187,24 @@ void main() {
     expect(dir.listSync().whereType<File>(), isEmpty);
   });
 
+  test('уровень строки ядра берётся из его же пометки, а не из случайных слов', () {
+    // Предупреждение из модуля «common/errors» — предупреждение, а не ошибка.
+    expect(
+        LogLine('test', '2026/10/04 01:09:46.310999 [Warning] common/errors: The feature WebSocket transport '
+            'is deprecated, not recommended for using and might be removed.').level,
+        1);
+    // Обычная строка со словом «error» в адресе сайта — не ошибка.
+    expect(LogLine('xray', '[Info] [1] proxy/http: request to Host [errors.example.com]').level, 0);
+    expect(LogLine('xray', '[Error] app/dns: failed to retrieve response for a.example').level, 2);
+    expect(LogLine('xray', '[Warning] core: Xray 26.9.30 started').level, 0);
+    expect(LogLine('sing-box', 'INFO[0000] router: error-pages.example matched').level, 0);
+    expect(LogLine('sing-box', 'ERROR[0012] connection: i/o timeout').level, 2);
+    expect(LogLine('sing-box', 'WARN[0010] inbound/tun: open interface take too much time').level, 1);
+    // Строки самой программы уровня не несут — для них работают слова.
+    expect(LogLine('app', 'Ошибка подключения: порт занят').level, 2);
+    expect(LogLine('app', 'Подключено').level, 0);
+  });
+
   test('вид всплывающего сообщения узнаётся по тексту: успех, ошибка или сведение', () {
     for (final text in [
       'Подписка «SkipIt VPN» обновлена — серверов: 4',
