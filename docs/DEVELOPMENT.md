@@ -14,11 +14,11 @@ Visual Studio 2022 с нагрузкой «Разработка классиче
 [Inno Setup](https://jrsoftware.org/isdl.php).
 
 ```
-powershell -ExecutionPolicy Bypass -File tools\build.ps1 -Version 1.0.4a     # программа + установщик
+powershell -ExecutionPolicy Bypass -File tools\build.ps1 -Version 1.0.5a     # программа + установщик
 powershell -ExecutionPolicy Bypass -File tools\dev.ps1                       # тестовая копия «SkipIt Dev»
 ```
 
-Результат сборки — `build\installer\SkipIt-Setup-Windows-1.0.4a.exe` и файл `.sha256` с его контрольной суммой.
+Результат сборки — `build\installer\SkipIt-Setup-Windows-1.0.5a.exe` и файл `.sha256` с его контрольной суммой.
 Тесты: `flutter test`. Иконка пересобирается скриптом `tools\make_icon.ps1`.
 
 Тест `min_window_test.dart` отрисовывает каждую страницу в окне наименьшего размера. Чтобы посмотреть
@@ -51,10 +51,10 @@ powershell -ExecutionPolicy Bypass -File tools\dev.ps1                       # �
 
 Собирать вручную не нужно — это делает GitHub Actions (`.github/workflows/build.yml`).
 
-1. **Releases → Draft a new release**, тег — номер версии: `1.0.1a`, `1.0.2b`, `1.0.4`
+1. **Releases → Draft a new release**, тег — номер версии: `1.0.1a`, `1.0.2b`, `1.0.5`
    (сначала сравниваются цифры, при равных — буква; версия без буквы новее версии с буквой).
 2. Галочку **pre-release** можно не трогать — сборка выставит её сама по номеру версии:
-   буква в конце (`1.0.1a`, `1.0.2b`) → pre-release, без буквы (`1.0.4`) → обычный релиз.
+   буква в конце (`1.0.1a`, `1.0.2b`) → pre-release, без буквы (`1.0.5`) → обычный релиз.
    Кто что получает:
    - канал **«Бета»** — всегда самую свежую версию, включая пре-релизы;
    - канал **«Стабильный»** (по умолчанию) — только обычные релизы. Пока ни одного обычного
