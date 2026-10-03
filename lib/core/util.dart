@@ -29,6 +29,14 @@ class ServerRefused implements Exception {
   String toString() => 'Сервер ответил $status';
 }
 
+/// Слово в нужной форме после числа: `plural(3, 'раз', 'раза', 'раз')` → «раза».
+/// [one] — для 1, 21, 31…; [few] — для 2–4, 22–24…; [many] — для остальных.
+String plural(int n, String one, String few, String many) {
+  final d = n.abs() % 100;
+  if (d >= 11 && d <= 14) return many;
+  return switch (d % 10) { 1 => one, 2 || 3 || 4 => few, _ => many };
+}
+
 /// Понятное описание сетевой ошибки для пользователя (подробности остаются в журнале).
 String describeNetError(Object e) {
   if (e is ServerRefused) return '${e.reason[0].toUpperCase()}${e.reason.substring(1)}';

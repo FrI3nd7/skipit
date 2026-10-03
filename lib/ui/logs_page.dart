@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import '../core/core_manager.dart';
 import '../core/log_explain.dart';
 import '../core/paths.dart';
+import '../core/util.dart';
 import '../state/app_scope.dart';
 import 'flag_text.dart';
 import 'smooth_scroll.dart';
@@ -613,7 +614,10 @@ class _SessionView extends StatelessWidget {
                       'по приложениям к ним не применились.\nОбычно это службы Windows. Но если игра из списка '
                       '«напрямую» идёт через VPN — причина в этом: её соединения помечены в списке.',
                   waitDuration: const Duration(milliseconds: 300),
-                  child: Text('соединений с неизвестной программой: ${s.unknownProcess}',
+                  // Счёт идёт по сообщениям ядра, а их на одно соединение бывает несколько — поэтому
+                  // «раз», а не «соединений».
+                  child: Text(
+                      'ядро не узнало программу: ${s.unknownProcess} ${plural(s.unknownProcess, 'раз', 'раза', 'раз')}',
                       style: TextStyle(color: C.isDark ? C.orangeLight : C.orange, fontSize: 11.5)),
                 ),
             ]),
