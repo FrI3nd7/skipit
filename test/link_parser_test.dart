@@ -164,16 +164,16 @@ void main() {
   test('Сравнение версий', () {
     expect(Updates.compare('26.3.27', '26.3.9'), 1);
     expect(Updates.compare('v1.14.2', '1.14.2'), 0);
-    expect(Updates.compare('1.0.0', '1.0.0a'), 1);
-    expect(Updates.compare('1.0.0b', '1.0.0a'), 1);
-    expect(Updates.compare('1.0.1a', '1.0.0'), 1);
-    // Схема версий SkipIt: 1.0.0a → 1.0.1a → 1.0.2b → 1.0.3.
-    const order = ['1.0.0a', '1.0.1a', '1.0.2b', '1.0.3'];
+    expect(Updates.compare('2.0.0', '2.0.0a'), 1);
+    expect(Updates.compare('2.0.0b', '2.0.0a'), 1);
+    expect(Updates.compare('2.0.1a', '2.0.0'), 1);
+    // Порядок версий с буквой (предварительные): таких выпусков у SkipIt пока не было, номера условные.
+    const order = ['2.0.0a', '2.0.1a', '2.0.2b', '2.0.3'];
     for (var i = 0; i + 1 < order.length; i++) {
       expect(Updates.compare(order[i + 1], order[i]), 1, reason: '${order[i + 1]} новее ${order[i]}');
       expect(Updates.compare(order[i], order[i + 1]), -1);
     }
-    expect(Updates.compare('v1.0.2b', '1.0.2b'), 0);
-    expect(Updates.compare('1.0.3', '1.0.3b'), 1);
+    expect(Updates.compare('v2.0.2b', '2.0.2b'), 0);
+    expect(Updates.compare('2.0.3', '2.0.3b'), 1);
   });
 }

@@ -163,7 +163,7 @@ class Updates {
     }
   }
 
-  /// Сравнение версий вида 1.2.3, 1.0.0a, v26.3.27: сначала числа, потом буквенный суффикс.
+  /// Сравнение версий вида 1.2.3, 1.2.3a, v26.3.27: сначала числа, потом буквенный суффикс.
   static int compare(String a, String b) {
     List<int> nums(String v) =>
         RegExp(r'\d+').allMatches(v.split(RegExp(r'[-+]')).first).map((m) => int.parse(m.group(0)!)).toList();
@@ -174,7 +174,7 @@ class Updates {
     }
     String suffix(String v) => RegExp(r'[a-z]+', caseSensitive: false).firstMatch(v.replaceAll(RegExp(r'^v'), ''))?.group(0) ?? '';
     final sa = suffix(a), sb = suffix(b);
-    // «1.0.0» новее, чем «1.0.0a» (буква — предварительная версия).
+    // «1.2.3» новее, чем «1.2.3a» (буква — предварительная версия).
     if (sa.isEmpty && sb.isNotEmpty) return 1;
     if (sa.isNotEmpty && sb.isEmpty) return -1;
     return sa.compareTo(sb).sign;

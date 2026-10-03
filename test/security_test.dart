@@ -125,10 +125,10 @@ void main() {
   });
 
   test('адреса обновления строятся из тега релиза, без API GitHub', () {
-    final r = Release('v1.0.2b', 'getskipit/skipit');
-    expect(r.version, '1.0.2b');
+    final r = Release('v1.0.4', 'getskipit/skipit');
+    expect(r.version, '1.0.4');
     expect(r.installerUrl,
-        'https://github.com/getskipit/skipit/releases/download/v1.0.2b/SkipIt-Setup-Windows-1.0.2b.exe');
+        'https://github.com/getskipit/skipit/releases/download/v1.0.4/SkipIt-Setup-Windows-1.0.4.exe');
     expect(r.checksumUrl, '${r.installerUrl}.sha256');
   });
 
@@ -190,7 +190,7 @@ void main() {
     expect(AppSettings().userAgent, 'SkipIt/$appVersion');
     // Значение, сохранённое старой версией, — не выбор пользователя: заменяется текущим.
     expect(AppSettings.fromJson({'userAgent': 'SkipIt/1.0'}).userAgent, 'SkipIt/$appVersion');
-    expect(AppSettings.fromJson({'userAgent': 'SkipIt/1.0.1a'}).userAgent, 'SkipIt/$appVersion');
+    expect(AppSettings.fromJson({'userAgent': 'SkipIt/1.0.1'}).userAgent, 'SkipIt/$appVersion');
     // А своё значение пользователя сохраняется как есть.
     expect(AppSettings.fromJson({'userAgent': 'Happ/2.0'}).userAgent, 'Happ/2.0');
   });
