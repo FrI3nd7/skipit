@@ -252,12 +252,15 @@ class _ShellState extends State<Shell> {
     ];
     return Scaffold(
       backgroundColor: C.bg,
-      // Ctrl+V (и Ctrl+Shift+V) в любом месте окна — импорт ссылки или конфига из буфера.
+      // Ctrl+V (и Ctrl+Shift+V) на главной — импорт ссылки или конфига из буфера. В других разделах
+      // сочетание ничего не добавляет: подписка, появившаяся из журнала или настроек, была бы неожиданной.
       body: Shortcuts(
-        shortcuts: const {
-          SingleActivator(LogicalKeyboardKey.keyV, control: true): _PasteIntent(),
-          SingleActivator(LogicalKeyboardKey.keyV, control: true, shift: true): _PasteIntent(),
-        },
+        shortcuts: _index != 0
+            ? const {}
+            : const {
+                SingleActivator(LogicalKeyboardKey.keyV, control: true): _PasteIntent(),
+                SingleActivator(LogicalKeyboardKey.keyV, control: true, shift: true): _PasteIntent(),
+              },
         child: Actions(
           actions: {_PasteIntent: _PasteAction(() => importFromClipboard(context))},
           child: Focus(

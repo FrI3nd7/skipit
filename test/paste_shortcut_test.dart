@@ -80,6 +80,13 @@ void main() {
     await tester.pump(const Duration(milliseconds: 400));
     await tester.tap(find.textContaining('Подключено').last);
     await tester.pump(const Duration(milliseconds: 100));
+    // В журнале (и в любом разделе, кроме главной) Ctrl+V ничего не добавляет.
+    await paste(tester);
+    expect(state.servers, isEmpty);
+    await tester.tap(find.byIcon(Icons.tune_rounded).first);
+    await tester.pump(const Duration(milliseconds: 400));
+    await paste(tester);
+    expect(state.servers, isEmpty);
     await tester.tap(find.byIcon(Icons.bolt_rounded).first);
     await tester.pump(const Duration(milliseconds: 400));
     await paste(tester);
